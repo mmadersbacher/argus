@@ -5,10 +5,10 @@ Tracking the phased build from the design spec. Checkboxes are the live task lis
 ## P0 — Foundations
 - [x] Repo + design spec
 - [x] Prior-art research folded into spec
-- [ ] Cargo workspace + `argus-core` domain model (in progress)
+- [x] Cargo workspace + `argus-core` domain model (tenants, assets, network, vuln, findings, risk)
+- [x] `argus-api` skeleton (axum: `/health`, `/api/assets`, `/api/assets/{id}`, `/api/summary`)
+- [x] `web/` Next.js console: dark design system + dashboard (metrics, risk distribution, asset table) wired to the API
 - [ ] Postgres schema + sqlx migrations
-- [ ] `argus-api` skeleton (axum: health, `/api/assets`)
-- [ ] `web/` Next.js shell + dark Enterprise-Security design system
 - [ ] CI (GitHub Actions: fmt + clippy + test)
 
 ## P1 — Spine (demo-able, real)
