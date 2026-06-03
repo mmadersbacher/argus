@@ -185,9 +185,22 @@ async fn run_scan(
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
+    let mut scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
     let live = scored.len();
-    for asset in &scored {
+    for asset in &mut scored {
+        // Live enrichment: NVD search for the asset's products + authoritative
+        // CISA-KEV + current EPSS, then recompute risk. Best-effort (falls back
+        // to the catalog-derived vulns/risk if the feeds are unavailable).
+        let products: Vec<String> =
+            asset.services.iter().filter_map(|s| s.product.clone()).collect();
+        let enriched =
+            argus_vuln::nvd::enrich(std::mem::take(&mut asset.vulnerabilities), &products).await;
+        asset.risk = argus_core::RiskScore::compute(&argus_vuln::risk_inputs(
+            &enriched,
+            asset.asset.exposure,
+            asset.asset.criticality,
+        ));
+        asset.vulnerabilities = enriched;
         db::upsert(&state.pool, asset).await.map_err(db_error)?;
     }
 

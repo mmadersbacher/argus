@@ -7,6 +7,7 @@
 //! `CveRecord` source away.
 
 pub mod catalog;
+pub mod nvd;
 pub mod version;
 
 use std::cmp::Ordering;

@@ -13,3 +13,5 @@ workspace = true
 
 [dependencies]
 argus-core = { path = "../argus-core" }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
