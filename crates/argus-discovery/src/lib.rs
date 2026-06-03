@@ -2,12 +2,14 @@
 //!
 //! Light active discovery for Argus: a safe, unauthenticated TCP-connect scan
 //! that finds live hosts and open services without raw sockets or root, plus an
-//! optional `nmap` backend for real service/version fingerprints. The deeper
-//! runZero-style features (subnet sampling, OS detection, passive sensing) get
-//! layered on top later.
+//! optional `nmap` backend for real service/version fingerprints and MAC/vendor
+//! enrichment from the ARP cache. The deeper runZero-style features (subnet
+//! sampling, OS detection, passive sensing) get layered on top later.
 
+pub mod arp;
 pub mod fingerprint;
 pub mod nmap;
+pub mod oui;
 pub mod portscan;
 pub mod target;
 
@@ -95,6 +97,7 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
             live.push(host);
         }
     }
+    enrich_macs(&mut live);
 
     ScanReport {
         hosts_scanned: targets.len(),
@@ -147,6 +150,43 @@ fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
     }
 }
 
+/// Enrich discovered hosts with a MAC address (from the kernel ARP cache) and a
+/// vendor (OUI lookup) for any interface that has an IP but no MAC yet.
+///
+/// Works for hosts on the local subnet that were just contacted; loopback and
+/// remote hosts have no ARP entry and are left unchanged.
+pub fn enrich_macs(hosts: &mut [DiscoveredHost]) {
+    if hosts.is_empty() {
+        return;
+    }
+    let arp = arp::read_arp_table();
+    if arp.is_empty() {
+        return;
+    }
+    let oui = oui::OuiDb::load();
+
+    for host in hosts.iter_mut() {
+        let mut found_vendor: Option<String> = None;
+        for iface in &mut host.asset.interfaces {
+            if iface.mac.is_some() {
+                continue;
+            }
+            let Some(ip) = iface.ip else { continue };
+            if let Some(&mac) = arp.get(&ip) {
+                iface.mac = Some(mac);
+                if found_vendor.is_none() {
+                    found_vendor = oui.vendor(mac).map(str::to_owned);
+                }
+            }
+        }
+        if host.asset.fingerprint.vendor.is_none() {
+            if let Some(vendor) = found_vendor {
+                host.asset.fingerprint.vendor = Some(vendor);
+            }
+        }
+    }
+}
+
 /// Whether an address is on a private / internal range (light exposure heuristic).
 pub(crate) fn is_internal(ip: IpAddr) -> bool {
     match ip {
@@ -175,5 +215,12 @@ mod tests {
         assert!(is_internal("127.0.0.1".parse().unwrap()));
         assert!(is_internal("10.1.2.3".parse().unwrap()));
         assert!(!is_internal("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn enrich_on_empty_is_noop() {
+        let mut hosts: Vec<DiscoveredHost> = Vec::new();
+        enrich_macs(&mut hosts);
+        assert!(hosts.is_empty());
     }
 }

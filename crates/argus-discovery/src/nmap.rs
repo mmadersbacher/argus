@@ -88,7 +88,9 @@ pub async fn scan(
     .map_err(|_| NmapError::Timeout)?
     .map_err(NmapError::Spawn)?;
 
-    parse(&String::from_utf8_lossy(&output.stdout))
+    let mut hosts = parse(&String::from_utf8_lossy(&output.stdout))?;
+    crate::enrich_macs(&mut hosts);
+    Ok(hosts)
 }
 
 /// Parse nmap XML (`-oX`) into discovered hosts.
