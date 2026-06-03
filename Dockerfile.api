@@ -1,0 +1,16 @@
+# --- build stage ---
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+RUN cargo build --release -p argus-api
+
+# --- runtime stage ---
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nmap ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/argus-api /usr/local/bin/argus-api
+ENV ARGUS_BIND=0.0.0.0:8088
+EXPOSE 8088
+CMD ["argus-api"]

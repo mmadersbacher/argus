@@ -1,0 +1,7 @@
+target
+.git
+.github
+docs
+web/node_modules
+web/.next
+**/*.md

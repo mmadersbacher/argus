@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argus
+    volumes:
+      - argus-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://argus:argus@postgres:5432/argus
+      ARGUS_BIND: 0.0.0.0:8088
+      RUST_LOG: info
+    ports:
+      - "8088:8088"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8088
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  argus-pgdata:

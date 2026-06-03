@@ -55,11 +55,11 @@ async fn main() {
     );
 
     let app = router(AppState { pool });
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8088));
-    let listener = tokio::net::TcpListener::bind(addr)
+    let bind = std::env::var("ARGUS_BIND").unwrap_or_else(|_| "127.0.0.1:8088".to_owned());
+    let listener = tokio::net::TcpListener::bind(bind.as_str())
         .await
         .expect("bind argus-api listener");
-    tracing::info!("argus-api listening on http://{addr}");
+    tracing::info!("argus-api listening on http://{bind}");
     axum::serve(listener, app)
         .await
         .expect("argus-api server error");
