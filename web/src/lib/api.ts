@@ -40,6 +40,26 @@ export interface Service {
   banner: string | null;
 }
 
+export type Severity = "none" | "low" | "medium" | "high" | "critical";
+
+export interface Cvss {
+  base_score: number;
+  vector: string | null;
+}
+
+export interface Epss {
+  score: number;
+  percentile: number;
+}
+
+export interface Vulnerability {
+  cve_id: string;
+  cvss: Cvss | null;
+  epss: Epss | null;
+  kev: boolean;
+  severity: Severity;
+}
+
 export interface ScoredAsset {
   id: string;
   asset_type: AssetType;
@@ -48,6 +68,7 @@ export interface ScoredAsset {
   fingerprint: Fingerprint;
   interfaces: NetInterface[];
   services: Service[];
+  vulnerabilities: Vulnerability[];
   first_seen: string;
   last_seen: string;
   risk: RiskScore;

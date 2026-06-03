@@ -91,6 +91,60 @@ export function AssetDrawer({
           )}
         </div>
 
+        <div className="mt-6">
+          <div className="mb-2 text-xs text-muted">
+            Vulnerabilities ({asset.vulnerabilities.length})
+          </div>
+          {asset.vulnerabilities.length === 0 ? (
+            <div className="text-sm text-muted">No known CVEs.</div>
+          ) : (
+            <div className="space-y-2">
+              {asset.vulnerabilities.map((v) => (
+                <div
+                  key={v.cve_id}
+                  className="flex items-center gap-2 rounded-lg border border-line bg-bg/40 px-3 py-2"
+                >
+                  <a
+                    href={`https://nvd.nist.gov/vuln/detail/${v.cve_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-sm text-accent hover:underline"
+                  >
+                    {v.cve_id}
+                  </a>
+                  {v.cvss && (
+                    <span
+                      className={`text-xs font-medium ${
+                        v.severity === "critical"
+                          ? "text-crit"
+                          : v.severity === "high"
+                            ? "text-high"
+                            : v.severity === "medium"
+                              ? "text-med"
+                              : v.severity === "low"
+                                ? "text-low"
+                                : "text-info"
+                      }`}
+                    >
+                      CVSS {v.cvss.base_score.toFixed(1)}
+                    </span>
+                  )}
+                  {v.epss && (
+                    <span className="text-xs text-muted">
+                      EPSS {Math.round(v.epss.score * 100)}%
+                    </span>
+                  )}
+                  {v.kev && (
+                    <span className="ml-auto rounded bg-crit/15 px-1.5 py-0.5 text-xs font-medium text-crit">
+                      KEV
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="mt-6 text-[11px] text-muted">
           First seen {new Date(asset.first_seen).toLocaleString()} · last seen{" "}
           {new Date(asset.last_seen).toLocaleString()}
