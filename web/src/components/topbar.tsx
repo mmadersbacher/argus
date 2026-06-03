@@ -15,9 +15,6 @@ export function TopBar() {
         <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-muted">
           <span className="argus-pulse h-2 w-2 rounded-full bg-accent" /> Live
         </span>
-        <button className="rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-[#04222a] transition hover:brightness-110">
-          Run scan
-        </button>
       </div>
     </header>
   );

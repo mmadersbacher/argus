@@ -33,6 +33,13 @@ export interface NetInterface {
   hostname: string | null;
 }
 
+export interface Service {
+  port: number;
+  protocol: string;
+  product: string | null;
+  banner: string | null;
+}
+
 export interface ScoredAsset {
   id: string;
   asset_type: AssetType;
@@ -40,6 +47,7 @@ export interface ScoredAsset {
   exposure: Exposure;
   fingerprint: Fingerprint;
   interfaces: NetInterface[];
+  services: Service[];
   first_seen: string;
   last_seen: string;
   risk: RiskScore;
@@ -52,11 +60,18 @@ export interface Summary {
   avg_risk: number;
 }
 
+export interface ScanResult {
+  target: string;
+  hosts_scanned: number;
+  live: number;
+  duration_ms: number;
+}
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8088";
 
-async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
     throw new Error(`${path} responded ${res.status}`);
   }
@@ -65,3 +80,10 @@ async function fetchJSON<T>(path: string): Promise<T> {
 
 export const getSummary = () => fetchJSON<Summary>("/api/summary");
 export const getAssets = () => fetchJSON<ScoredAsset[]>("/api/assets");
+
+export const runScan = (target: string) =>
+  fetchJSON<ScanResult>("/api/scan", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
