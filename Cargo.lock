@@ -22,6 +22,7 @@ name = "argus-api"
 version = "0.1.0"
 dependencies = [
  "argus-core",
+ "argus-discovery",
  "axum",
  "serde",
  "serde_json",

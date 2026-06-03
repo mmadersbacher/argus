@@ -1,21 +1,24 @@
-//! In-memory seed data so the API (and the web console) have something real to
-//! render before the Postgres-backed inventory lands in P1.
+//! The API view-model (`ScoredAsset`, `Summary`), in-memory seed data, and the
+//! mapping from a discovery result into a scored asset.
 
 use std::net::{IpAddr, Ipv4Addr};
 
 use argus_core::{
-    Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, MacAddr, RiskBand,
-    RiskInputs, RiskScore,
+    Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, MacAddr, Protocol,
+    RiskBand, RiskInputs, RiskScore, Service,
 };
+use argus_discovery::DiscoveredHost;
 use serde::Serialize;
 use time::OffsetDateTime;
 
-/// An asset together with its computed risk score, as returned by the API.
+/// An asset together with its observed services and computed risk score.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScoredAsset {
     /// The underlying asset (flattened into the JSON object).
     #[serde(flatten)]
     pub asset: Asset,
+    /// Observed network services.
+    pub services: Vec<Service>,
     /// Composite exposure/risk score.
     pub risk: RiskScore,
 }
@@ -61,7 +64,28 @@ impl Summary {
     }
 }
 
-/// Static description of one seeded asset.
+/// Map a discovered host into a scored asset.
+///
+/// Risk currently derives from the discovery insecure-service heuristic
+/// (placeholder) until `argus-vuln` provides real CVE-backed inputs.
+#[must_use]
+pub fn scored_from_discovered(host: DiscoveredHost) -> ScoredAsset {
+    let exposure = host.asset.exposure;
+    let criticality = host.asset.criticality;
+    let risk = RiskScore::compute(&RiskInputs {
+        max_cvss: host.insecure_score,
+        max_epss: 0.0,
+        kev_present: false,
+        exposure,
+        criticality,
+    });
+    ScoredAsset {
+        asset: host.asset,
+        services: host.services,
+        risk,
+    }
+}
+
 struct SeedSpec {
     asset_type: AssetType,
     criticality: Criticality,
@@ -71,6 +95,7 @@ struct SeedSpec {
     device_type: &'static str,
     mac: [u8; 6],
     ip: [u8; 4],
+    ports: &'static [u16],
     max_cvss: f32,
     max_epss: f32,
     kev: bool,
@@ -87,6 +112,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "web-server",
             mac: [0x00, 0x16, 0x3e, 0x1a, 0x2b, 0x3c],
             ip: [203, 0, 113, 10],
+            ports: &[22, 80, 443],
             max_cvss: 9.8,
             max_epss: 0.92,
             kev: true,
@@ -100,6 +126,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "workstation",
             mac: [0xb8, 0x85, 0x84, 0x10, 0x20, 0x30],
             ip: [10, 0, 5, 42],
+            ports: &[135, 139, 445, 3389],
             max_cvss: 6.5,
             max_epss: 0.08,
             kev: false,
@@ -113,6 +140,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "core-switch",
             mac: [0x00, 0x1b, 0x0d, 0x55, 0x66, 0x77],
             ip: [10, 0, 0, 1],
+            ports: &[22, 443],
             max_cvss: 8.1,
             max_epss: 0.45,
             kev: true,
@@ -126,6 +154,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "ip-camera",
             mac: [0xc0, 0x56, 0xe3, 0xaa, 0xbb, 0xcc],
             ip: [10, 0, 9, 17],
+            ports: &[80, 443],
             max_cvss: 7.2,
             max_epss: 0.30,
             kev: false,
@@ -139,6 +168,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "plc",
             mac: [0x00, 0x1c, 0x06, 0xde, 0xad, 0x01],
             ip: [192, 168, 50, 5],
+            ports: &[502],
             max_cvss: 5.3,
             max_epss: 0.02,
             kev: false,
@@ -152,6 +182,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "infusion-pump",
             mac: [0x00, 0x80, 0x64, 0x12, 0x34, 0x56],
             ip: [192, 168, 60, 22],
+            ports: &[443],
             max_cvss: 9.1,
             max_epss: 0.15,
             kev: false,
@@ -174,6 +205,16 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                 vlan: None,
                 hostname: None,
             }];
+            let services = s
+                .ports
+                .iter()
+                .map(|&port| Service {
+                    port,
+                    protocol: Protocol::Tcp,
+                    product: None,
+                    banner: None,
+                })
+                .collect();
             let asset = Asset {
                 id: AssetId::new(),
                 asset_type: s.asset_type,
@@ -196,7 +237,11 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                 exposure: s.exposure,
                 criticality: s.criticality,
             });
-            ScoredAsset { asset, risk }
+            ScoredAsset {
+                asset,
+                services,
+                risk,
+            }
         })
         .collect()
 }
@@ -225,8 +270,29 @@ mod tests {
         let assets = seed_assets();
         let json = serde_json::to_string(&assets[0]).expect("serialize");
         assert!(json.contains("\"risk\""));
+        assert!(json.contains("\"services\""));
         assert!(json.contains("\"first_seen\""));
-        // RFC3339 timestamps contain a 'T' separator and look like 2026-..T..Z
         assert!(json.contains('T'));
+    }
+
+    #[test]
+    fn discovered_host_maps_to_scored_with_nonzero_risk() {
+        let host = DiscoveredHost {
+            asset: Asset {
+                id: AssetId::new(),
+                asset_type: AssetType::Network,
+                criticality: Criticality::High,
+                exposure: Exposure::InternetFacing,
+                fingerprint: Fingerprint::default(),
+                interfaces: Vec::new(),
+                first_seen: OffsetDateTime::UNIX_EPOCH,
+                last_seen: OffsetDateTime::UNIX_EPOCH,
+            },
+            services: Vec::new(),
+            open_ports: vec![23],
+            insecure_score: 7.5,
+        };
+        let scored = scored_from_discovered(host);
+        assert!(scored.risk.value > 0.0);
     }
 }
