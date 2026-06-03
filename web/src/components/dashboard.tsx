@@ -259,6 +259,15 @@ export function Dashboard() {
                     <td className="px-3 py-3 text-xs">{exposureLabel[a.exposure]}</td>
                     <td className="px-5 py-3 text-right">
                       <RiskBadge band={a.risk.band} value={a.risk.value} />
+                      {a.vulnerabilities.length > 0 && (
+                        <div className="mt-1 text-[11px] text-muted">
+                          {a.vulnerabilities.length} CVE
+                          {a.vulnerabilities.length > 1 ? "s" : ""}
+                          {a.vulnerabilities.some((v) => v.kev) && (
+                            <span className="ml-1 font-medium text-crit">· KEV</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
