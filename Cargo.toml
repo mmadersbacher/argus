@@ -42,6 +42,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde", "serde-well-known", "macros", "std"] }
 thiserror = "2"
 ipnet = "2"
+roxmltree = "0.20"
 
 # Async + HTTP
 tokio = { version = "1", features = ["full"] }

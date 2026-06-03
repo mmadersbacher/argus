@@ -1,11 +1,13 @@
 //! # argus-discovery
 //!
 //! Light active discovery for Argus: a safe, unauthenticated TCP-connect scan
-//! that finds live hosts and open services without raw sockets or root. It is
-//! deliberately minimal — the runZero-style depth (subnet sampling, banner
-//! grabbing, OS fingerprinting, passive sensing) gets layered on top later.
+//! that finds live hosts and open services without raw sockets or root, plus an
+//! optional `nmap` backend for real service/version fingerprints. The deeper
+//! runZero-style features (subnet sampling, OS detection, passive sensing) get
+//! layered on top later.
 
 pub mod fingerprint;
+pub mod nmap;
 pub mod portscan;
 pub mod target;
 
@@ -65,7 +67,7 @@ pub struct ScanReport {
     pub duration_ms: u64,
 }
 
-/// Run a light scan over the given hosts.
+/// Run a light connect scan over the given hosts.
 pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
     let started = Instant::now();
     let sem = Arc::new(Semaphore::new(opts.concurrency.max(1)));
@@ -146,7 +148,7 @@ fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
 }
 
 /// Whether an address is on a private / internal range (light exposure heuristic).
-fn is_internal(ip: IpAddr) -> bool {
+pub(crate) fn is_internal(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
         IpAddr::V6(v6) => {

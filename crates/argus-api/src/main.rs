@@ -1,11 +1,12 @@
 //! Argus HTTP API server.
 //!
 //! Holds the asset inventory in shared state, serves it to the console, and
-//! exposes `POST /api/scan` which runs `argus-discovery` against a target and
-//! merges the result into the inventory.
+//! exposes `POST /api/scan` which runs discovery against a target (nmap when
+//! available, else the built-in connect scanner) and merges the result.
 #![allow(clippy::unused_async, clippy::needless_pass_by_value)] // axum handler ergonomics
 
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -100,16 +101,18 @@ struct ScanRequest {
 #[derive(Serialize)]
 struct ScanResponse {
     target: String,
+    engine: &'static str,
     hosts_scanned: usize,
     live: usize,
     duration_ms: u64,
 }
 
-/// Run a light discovery scan and merge the result into the inventory.
+/// Run a discovery scan and merge the result into the inventory.
 ///
-/// Body: `{ "target": "<ip|cidr>" }` (defaults to `127.0.0.1`). Discovered
-/// hosts are deduplicated against the existing inventory by their correlation
-/// key, so repeated scans update rather than duplicate.
+/// Body: `{ "target": "<ip|cidr>" }` (defaults to `127.0.0.1`). Uses nmap when
+/// it is installed (real service/version fingerprints), otherwise the built-in
+/// connect scanner. Discovered hosts are deduplicated against the inventory by
+/// correlation key, so repeated scans update rather than duplicate.
 async fn run_scan(
     State(state): State<AppState>,
     body: Option<Json<ScanRequest>>,
@@ -118,15 +121,33 @@ async fn run_scan(
         .and_then(|b| b.0.target)
         .unwrap_or_else(|| "127.0.0.1".to_owned());
 
-    let hosts =
+    let ips =
         argus_discovery::expand(&target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let report = argus_discovery::scan(&hosts, &argus_discovery::ScanOptions::default()).await;
 
-    let scored: Vec<ScoredAsset> = report
-        .live
-        .into_iter()
-        .map(scored_from_discovered)
-        .collect();
+    let started = Instant::now();
+    let (engine, hosts) = if argus_discovery::nmap::available().await {
+        match argus_discovery::nmap::scan(
+            &target,
+            argus_discovery::fingerprint::PORTS,
+            Duration::from_secs(120),
+        )
+        .await
+        {
+            Ok(found) => ("nmap", found),
+            Err(err) => {
+                tracing::warn!(error = %err, "nmap failed; falling back to connect scan");
+                let report =
+                    argus_discovery::scan(&ips, &argus_discovery::ScanOptions::default()).await;
+                ("connect", report.live)
+            }
+        }
+    } else {
+        let report = argus_discovery::scan(&ips, &argus_discovery::ScanOptions::default()).await;
+        ("connect", report.live)
+    };
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
     let live = scored.len();
 
     {
@@ -138,11 +159,12 @@ async fn run_scan(
         }
     }
 
-    tracing::info!(target = %target, hosts = report.hosts_scanned, live, "scan complete");
+    tracing::info!(target = %target, engine, hosts = ips.len(), live, "scan complete");
     Ok(Json(ScanResponse {
         target,
-        hosts_scanned: report.hosts_scanned,
+        engine,
+        hosts_scanned: ips.len(),
         live,
-        duration_ms: report.duration_ms,
+        duration_ms,
     }))
 }
