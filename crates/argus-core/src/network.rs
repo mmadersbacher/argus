@@ -2,10 +2,12 @@
 
 use std::net::IpAddr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A 48-bit IEEE 802 MAC address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Serializes to and from the canonical `aa:bb:cc:dd:ee:ff` string form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MacAddr(pub [u8; 6]);
 
 impl MacAddr {
@@ -14,6 +16,21 @@ impl MacAddr {
     #[must_use]
     pub fn oui(&self) -> [u8; 3] {
         [self.0[0], self.0[1], self.0[2]]
+    }
+
+    /// Parse a canonical `aa:bb:cc:dd:ee:ff` MAC string.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut bytes = [0u8; 6];
+        let mut count = 0usize;
+        for part in s.split(':') {
+            if count >= 6 {
+                return None;
+            }
+            bytes[count] = u8::from_str_radix(part, 16).ok()?;
+            count += 1;
+        }
+        (count == 6).then_some(Self(bytes))
     }
 }
 
@@ -25,6 +42,20 @@ impl std::fmt::Display for MacAddr {
             "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
             b[0], b[1], b[2], b[3], b[4], b[5]
         )
+    }
+}
+
+impl Serialize for MacAddr {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for MacAddr {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let s = String::deserialize(deserializer)?;
+        Self::parse(&s).ok_or_else(|| D::Error::custom(format!("invalid MAC address: {s}")))
     }
 }
 
@@ -82,5 +113,20 @@ mod tests {
     fn mac_oui_is_first_three_octets() {
         let mac = MacAddr([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]);
         assert_eq!(mac.oui(), [0xde, 0xad, 0xbe]);
+    }
+
+    #[test]
+    fn mac_roundtrips_as_string() {
+        let mac = MacAddr([0x00, 0x16, 0x3e, 0x1a, 0x2b, 0x3c]);
+        let json = serde_json::to_string(&mac).unwrap();
+        assert_eq!(json, "\"00:16:3e:1a:2b:3c\"");
+        let back: MacAddr = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, mac);
+    }
+
+    #[test]
+    fn mac_parse_rejects_garbage() {
+        assert!(MacAddr::parse("not-a-mac").is_none());
+        assert!(MacAddr::parse("00:16:3e:1a:2b").is_none());
     }
 }

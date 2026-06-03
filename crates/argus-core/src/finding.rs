@@ -52,6 +52,7 @@ pub struct Finding {
     /// Severity.
     pub severity: Severity,
     /// When it was observed.
+    #[serde(with = "time::serde::rfc3339")]
     pub observed_at: OffsetDateTime,
 }
 

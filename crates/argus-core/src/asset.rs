@@ -86,8 +86,10 @@ pub struct Asset {
     /// Known network interfaces.
     pub interfaces: Vec<Interface>,
     /// First time this asset was observed.
+    #[serde(with = "time::serde::rfc3339")]
     pub first_seen: OffsetDateTime,
     /// Most recent observation.
+    #[serde(with = "time::serde::rfc3339")]
     pub last_seen: OffsetDateTime,
 }
 
