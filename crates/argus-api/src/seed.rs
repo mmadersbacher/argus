@@ -11,11 +11,11 @@ use argus_core::{
     RiskBand, RiskScore, Service, Vulnerability,
 };
 use argus_discovery::DiscoveredHost;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 /// An asset together with its services, correlated CVEs and computed risk.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredAsset {
     /// The underlying asset (flattened into the JSON object).
     #[serde(flatten)]

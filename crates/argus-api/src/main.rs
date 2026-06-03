@@ -1,11 +1,10 @@
 //! Argus HTTP API server.
 //!
-//! Holds the asset inventory in shared state, serves it to the console, and
-//! exposes `POST /api/scan` which runs discovery against a target (nmap when
-//! available, else the built-in connect scanner) and merges the result.
+//! Postgres-backed asset inventory (sqlx). Serves it to the console and exposes
+//! `POST /api/scan` which runs discovery (nmap when available, else the built-in
+//! connect scanner) and upserts the results into the inventory.
 #![allow(clippy::unused_async, clippy::needless_pass_by_value)] // axum handler ergonomics
 
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
@@ -13,18 +12,20 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod db;
 mod seed;
 
 use seed::{scored_from_discovered, seed_assets, ScoredAsset, Summary};
 
-/// Shared application state: the live asset inventory.
+/// Shared application state: the Postgres connection pool.
 #[derive(Clone)]
 struct AppState {
-    assets: Arc<RwLock<Vec<ScoredAsset>>>,
+    pool: PgPool,
 }
 
 #[tokio::main]
@@ -35,11 +36,25 @@ async fn main() {
         )
         .init();
 
-    let state = AppState {
-        assets: Arc::new(RwLock::new(seed_assets())),
-    };
-    let app = router(state);
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| db::DEFAULT_DATABASE_URL.to_owned());
+    let pool = db::connect(&database_url)
+        .await
+        .expect("connect to Postgres (set DATABASE_URL or run the local argus DB)");
 
+    // Seed the inventory only when the database is empty (first run).
+    if db::count(&pool).await.expect("count assets") == 0 {
+        tracing::info!("empty inventory — seeding demo assets");
+        for asset in seed_assets() {
+            db::upsert(&pool, &asset).await.expect("seed upsert");
+        }
+    }
+    tracing::info!(
+        assets = db::count(&pool).await.unwrap_or(0),
+        "inventory ready"
+    );
+
+    let app = router(AppState { pool });
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8088));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -63,34 +78,45 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health() -> Json<serde_json::Value> {
+fn db_error(err: sqlx::Error) -> (StatusCode, String) {
+    tracing::error!(error = %err, "database error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("database error: {err}"),
+    )
+}
+
+async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let assets = db::count(&state.pool).await.unwrap_or(0);
     Json(serde_json::json!({
         "status": "ok",
         "service": "argus-api",
         "version": env!("CARGO_PKG_VERSION"),
+        "assets": assets,
     }))
 }
 
-async fn list_assets(State(state): State<AppState>) -> Json<Vec<ScoredAsset>> {
-    let assets = state.assets.read().expect("assets lock poisoned").clone();
-    Json(assets)
+async fn list_assets(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ScoredAsset>>, (StatusCode, String)> {
+    db::load_all(&state.pool).await.map(Json).map_err(db_error)
 }
 
 async fn get_asset(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<ScoredAsset>, StatusCode> {
-    let assets = state.assets.read().expect("assets lock poisoned").clone();
+) -> Result<Json<ScoredAsset>, (StatusCode, String)> {
+    let assets = db::load_all(&state.pool).await.map_err(db_error)?;
     assets
         .into_iter()
         .find(|a| a.asset.id.to_string() == id)
         .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "asset not found".to_owned()))
 }
 
-async fn summary(State(state): State<AppState>) -> Json<Summary> {
-    let assets = state.assets.read().expect("assets lock poisoned").clone();
-    Json(Summary::from_assets(&assets))
+async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, (StatusCode, String)> {
+    let assets = db::load_all(&state.pool).await.map_err(db_error)?;
+    Ok(Json(Summary::from_assets(&assets)))
 }
 
 #[derive(Deserialize)]
@@ -107,11 +133,10 @@ struct ScanResponse {
     duration_ms: u64,
 }
 
-/// Run a discovery scan and merge the result into the inventory.
+/// Run a discovery scan and upsert the results into the Postgres inventory.
 ///
 /// Body: `{ "target": "<ip|cidr>" }` (defaults to `127.0.0.1`). Uses nmap when
-/// it is installed (real service/version fingerprints), otherwise the built-in
-/// connect scanner. Discovered hosts are deduplicated against the inventory by
+/// installed, else the connect scanner. Discovered hosts are deduplicated by
 /// correlation key, so repeated scans update rather than duplicate.
 async fn run_scan(
     State(state): State<AppState>,
@@ -162,14 +187,8 @@ async fn run_scan(
 
     let scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
     let live = scored.len();
-
-    {
-        let mut inventory = state.assets.write().expect("assets lock poisoned");
-        for asset in scored {
-            let key = asset.asset.dedup_key();
-            inventory.retain(|existing| existing.asset.dedup_key() != key);
-            inventory.push(asset);
-        }
+    for asset in &scored {
+        db::upsert(&state.pool, asset).await.map_err(db_error)?;
     }
 
     tracing::info!(target = %target, engine, hosts = ips.len(), live, "scan complete");
