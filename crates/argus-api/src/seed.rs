@@ -1,17 +1,20 @@
 //! The API view-model (`ScoredAsset`, `Summary`), in-memory seed data, and the
 //! mapping from a discovery result into a scored asset.
+//!
+//! Risk for both seed and discovered assets is derived the same way: correlate
+//! the asset's services against the `argus-vuln` CVE catalog, then score.
 
 use std::net::{IpAddr, Ipv4Addr};
 
 use argus_core::{
     Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, MacAddr, Protocol,
-    RiskBand, RiskInputs, RiskScore, Service,
+    RiskBand, RiskScore, Service, Vulnerability,
 };
 use argus_discovery::DiscoveredHost;
 use serde::Serialize;
 use time::OffsetDateTime;
 
-/// An asset together with its observed services and computed risk score.
+/// An asset together with its services, correlated CVEs and computed risk.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScoredAsset {
     /// The underlying asset (flattened into the JSON object).
@@ -19,6 +22,8 @@ pub struct ScoredAsset {
     pub asset: Asset,
     /// Observed network services.
     pub services: Vec<Service>,
+    /// Correlated vulnerabilities (CVEs) from the asset's services.
+    pub vulnerabilities: Vec<Vulnerability>,
     /// Composite exposure/risk score.
     pub risk: RiskScore,
 }
@@ -64,24 +69,30 @@ impl Summary {
     }
 }
 
-/// Map a discovered host into a scored asset.
-///
-/// Risk currently derives from the discovery insecure-service heuristic
-/// (placeholder) until `argus-vuln` provides real CVE-backed inputs.
-#[must_use]
-pub fn scored_from_discovered(host: DiscoveredHost) -> ScoredAsset {
-    let exposure = host.asset.exposure;
-    let criticality = host.asset.criticality;
-    let risk = RiskScore::compute(&RiskInputs {
-        max_cvss: host.insecure_score,
-        max_epss: 0.0,
-        kev_present: false,
+/// Score an asset from its services via CVE correlation.
+fn score(
+    services: &[Service],
+    exposure: Exposure,
+    criticality: Criticality,
+) -> (Vec<Vulnerability>, RiskScore) {
+    let vulnerabilities = argus_vuln::correlate_services(services);
+    let risk = RiskScore::compute(&argus_vuln::risk_inputs(
+        &vulnerabilities,
         exposure,
         criticality,
-    });
+    ));
+    (vulnerabilities, risk)
+}
+
+/// Map a discovered host into a scored asset (real CVE-backed risk).
+#[must_use]
+pub fn scored_from_discovered(host: DiscoveredHost) -> ScoredAsset {
+    let (vulnerabilities, risk) =
+        score(&host.services, host.asset.exposure, host.asset.criticality);
     ScoredAsset {
         asset: host.asset,
         services: host.services,
+        vulnerabilities,
         risk,
     }
 }
@@ -95,10 +106,8 @@ struct SeedSpec {
     device_type: &'static str,
     mac: [u8; 6],
     ip: [u8; 4],
-    ports: &'static [u16],
-    max_cvss: f32,
-    max_epss: f32,
-    kev: bool,
+    /// (port, service product) — products feed CVE correlation.
+    services: &'static [(u16, &'static str)],
 }
 
 fn specs() -> Vec<SeedSpec> {
@@ -112,10 +121,11 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "web-server",
             mac: [0x00, 0x16, 0x3e, 0x1a, 0x2b, 0x3c],
             ip: [203, 0, 113, 10],
-            ports: &[22, 80, 443],
-            max_cvss: 9.8,
-            max_epss: 0.92,
-            kev: true,
+            services: &[
+                (22, "OpenSSH 8.9p1"),
+                (80, "Apache httpd 2.4.49"),
+                (443, "Apache httpd 2.4.49"),
+            ],
         },
         SeedSpec {
             asset_type: AssetType::It,
@@ -126,10 +136,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "workstation",
             mac: [0xb8, 0x85, 0x84, 0x10, 0x20, 0x30],
             ip: [10, 0, 5, 42],
-            ports: &[135, 139, 445, 3389],
-            max_cvss: 6.5,
-            max_epss: 0.08,
-            kev: false,
+            services: &[(139, "smb"), (445, "smb"), (3389, "rdp")],
         },
         SeedSpec {
             asset_type: AssetType::Network,
@@ -140,10 +147,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "core-switch",
             mac: [0x00, 0x1b, 0x0d, 0x55, 0x66, 0x77],
             ip: [10, 0, 0, 1],
-            ports: &[22, 443],
-            max_cvss: 8.1,
-            max_epss: 0.45,
-            kev: true,
+            services: &[(22, "OpenSSH 8.6"), (443, "https")],
         },
         SeedSpec {
             asset_type: AssetType::Iot,
@@ -154,10 +158,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "ip-camera",
             mac: [0xc0, 0x56, 0xe3, 0xaa, 0xbb, 0xcc],
             ip: [10, 0, 9, 17],
-            ports: &[80, 443],
-            max_cvss: 7.2,
-            max_epss: 0.30,
-            kev: false,
+            services: &[(80, "http"), (443, "https")],
         },
         SeedSpec {
             asset_type: AssetType::Ot,
@@ -168,10 +169,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "plc",
             mac: [0x00, 0x1c, 0x06, 0xde, 0xad, 0x01],
             ip: [192, 168, 50, 5],
-            ports: &[502],
-            max_cvss: 5.3,
-            max_epss: 0.02,
-            kev: false,
+            services: &[(502, "modbus")],
         },
         SeedSpec {
             asset_type: AssetType::Iomt,
@@ -182,15 +180,12 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "infusion-pump",
             mac: [0x00, 0x80, 0x64, 0x12, 0x34, 0x56],
             ip: [192, 168, 60, 22],
-            ports: &[443],
-            max_cvss: 9.1,
-            max_epss: 0.15,
-            kev: false,
+            services: &[(443, "https")],
         },
     ]
 }
 
-/// Build the seeded, risk-scored asset list.
+/// Build the seeded, CVE-correlated, risk-scored asset list.
 #[must_use]
 pub fn seed_assets() -> Vec<ScoredAsset> {
     let now = OffsetDateTime::now_utc();
@@ -205,13 +200,13 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                 vlan: None,
                 hostname: None,
             }];
-            let services = s
-                .ports
+            let services: Vec<Service> = s
+                .services
                 .iter()
-                .map(|&port| Service {
+                .map(|&(port, product)| Service {
                     port,
                     protocol: Protocol::Tcp,
-                    product: None,
+                    product: Some(product.to_owned()),
                     banner: None,
                 })
                 .collect();
@@ -230,16 +225,11 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                 first_seen: now,
                 last_seen: now,
             };
-            let risk = RiskScore::compute(&RiskInputs {
-                max_cvss: s.max_cvss,
-                max_epss: s.max_epss,
-                kev_present: s.kev,
-                exposure: s.exposure,
-                criticality: s.criticality,
-            });
+            let (vulnerabilities, risk) = score(&services, s.exposure, s.criticality);
             ScoredAsset {
                 asset,
                 services,
+                vulnerabilities,
                 risk,
             }
         })
@@ -265,18 +255,38 @@ mod tests {
         assert!((0.0..=100.0).contains(&s.avg_risk));
     }
 
+    fn web_server(assets: &[ScoredAsset]) -> &ScoredAsset {
+        assets
+            .iter()
+            .find(|a| a.asset.fingerprint.device_type.as_deref() == Some("web-server"))
+            .expect("web-server seed asset")
+    }
+
     #[test]
-    fn scored_asset_serializes_flat_with_risk_and_rfc3339() {
+    fn seed_correlates_real_cves() {
         let assets = seed_assets();
-        let json = serde_json::to_string(&assets[0]).expect("serialize");
+        let web = web_server(&assets);
+        // Apache 2.4.49 → CVE-2021-41773
+        assert!(web
+            .vulnerabilities
+            .iter()
+            .any(|v| v.cve_id == "CVE-2021-41773"));
+        assert!(!web.vulnerabilities.is_empty());
+    }
+
+    #[test]
+    fn scored_asset_serializes_with_vulns_and_rfc3339() {
+        let assets = seed_assets();
+        let json = serde_json::to_string(web_server(&assets)).expect("serialize");
         assert!(json.contains("\"risk\""));
+        assert!(json.contains("\"vulnerabilities\""));
         assert!(json.contains("\"services\""));
-        assert!(json.contains("\"first_seen\""));
+        assert!(json.contains("CVE-"));
         assert!(json.contains('T'));
     }
 
     #[test]
-    fn discovered_host_maps_to_scored_with_nonzero_risk() {
+    fn discovered_host_with_vulnerable_service_scores() {
         let host = DiscoveredHost {
             asset: Asset {
                 id: AssetId::new(),
@@ -288,11 +298,20 @@ mod tests {
                 first_seen: OffsetDateTime::UNIX_EPOCH,
                 last_seen: OffsetDateTime::UNIX_EPOCH,
             },
-            services: Vec::new(),
-            open_ports: vec![23],
-            insecure_score: 7.5,
+            services: vec![Service {
+                port: 3389,
+                protocol: Protocol::Tcp,
+                product: Some("rdp".to_owned()),
+                banner: None,
+            }],
+            open_ports: vec![3389],
+            insecure_score: 0.0,
         };
         let scored = scored_from_discovered(host);
+        assert!(scored
+            .vulnerabilities
+            .iter()
+            .any(|v| v.cve_id == "CVE-2019-0708"));
         assert!(scored.risk.value > 0.0);
     }
 }
