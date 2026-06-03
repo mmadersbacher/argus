@@ -1,0 +1,19 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Web
+node_modules
+/web/node_modules
+/web/.next
+/web/out
+/web/dist
+
+# Misc
+*.log
+.DS_Store
