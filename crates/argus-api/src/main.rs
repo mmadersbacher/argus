@@ -136,13 +136,26 @@ async fn run_scan(
             Ok(found) => ("nmap", found),
             Err(err) => {
                 tracing::warn!(error = %err, "nmap failed; falling back to connect scan");
-                let report =
-                    argus_discovery::scan(&ips, &argus_discovery::ScanOptions::default()).await;
+                let report = argus_discovery::scan(
+                    &ips,
+                    &argus_discovery::ScanOptions {
+                        sample: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
                 ("connect", report.live)
             }
         }
     } else {
-        let report = argus_discovery::scan(&ips, &argus_discovery::ScanOptions::default()).await;
+        let report = argus_discovery::scan(
+            &ips,
+            &argus_discovery::ScanOptions {
+                sample: true,
+                ..Default::default()
+            },
+        )
+        .await;
         ("connect", report.live)
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

@@ -1,16 +1,17 @@
 //! # argus-discovery
 //!
 //! Light active discovery for Argus: a safe, unauthenticated TCP-connect scan
-//! that finds live hosts and open services without raw sockets or root, plus an
-//! optional `nmap` backend for real service/version fingerprints and MAC/vendor
-//! enrichment from the ARP cache. The deeper runZero-style features (subnet
-//! sampling, OS detection, passive sensing) get layered on top later.
+//! that finds live hosts and open services without raw sockets or root, an
+//! optional `nmap` backend for real service/version fingerprints, MAC/vendor
+//! enrichment from the ARP cache, and runZero-style subnet sampling. Deeper
+//! features (masscan, OS detection, passive sensing) get layered on top later.
 
 pub mod arp;
 pub mod fingerprint;
 pub mod nmap;
 pub mod oui;
 pub mod portscan;
+pub mod sampling;
 pub mod target;
 
 use std::net::IpAddr;
@@ -33,6 +34,8 @@ pub struct ScanOptions {
     pub connect_timeout: Duration,
     /// Maximum hosts probed concurrently.
     pub concurrency: usize,
+    /// Skip dead /24 subnets via sampling before the full scan.
+    pub sample: bool,
 }
 
 impl Default for ScanOptions {
@@ -41,6 +44,7 @@ impl Default for ScanOptions {
             ports: fingerprint::PORTS.to_vec(),
             connect_timeout: Duration::from_millis(700),
             concurrency: 256,
+            sample: false,
         }
     }
 }
@@ -61,7 +65,7 @@ pub struct DiscoveredHost {
 /// Result of a scan run.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanReport {
-    /// How many hosts were probed.
+    /// How many hosts were requested.
     pub hosts_scanned: usize,
     /// Live hosts discovered.
     pub live: Vec<DiscoveredHost>,
@@ -72,12 +76,18 @@ pub struct ScanReport {
 /// Run a light connect scan over the given hosts.
 pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
     let started = Instant::now();
+    let scanned: Vec<IpAddr> = if opts.sample {
+        sampling::responsive_targets(targets, opts.connect_timeout).await
+    } else {
+        targets.to_vec()
+    };
+
     let sem = Arc::new(Semaphore::new(opts.concurrency.max(1)));
     let ports = Arc::new(opts.ports.clone());
     let connect_timeout = opts.connect_timeout;
 
-    let mut handles = Vec::with_capacity(targets.len());
-    for &ip in targets {
+    let mut handles = Vec::with_capacity(scanned.len());
+    for ip in scanned {
         let sem = Arc::clone(&sem);
         let ports = Arc::clone(&ports);
         handles.push(tokio::spawn(async move {
