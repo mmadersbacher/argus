@@ -158,7 +158,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "ip-camera",
             mac: [0xc0, 0x56, 0xe3, 0xaa, 0xbb, 0xcc],
             ip: [10, 0, 9, 17],
-            services: &[(80, "http"), (443, "https")],
+            services: &[(80, "Hikvision IP Camera"), (443, "https")],
         },
         SeedSpec {
             asset_type: AssetType::Ot,
@@ -169,7 +169,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "plc",
             mac: [0x00, 0x1c, 0x06, 0xde, 0xad, 0x01],
             ip: [192, 168, 50, 5],
-            services: &[(502, "modbus")],
+            services: &[(502, "Siemens SIMATIC S7")],
         },
         SeedSpec {
             asset_type: AssetType::Iomt,
