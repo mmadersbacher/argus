@@ -145,3 +145,40 @@ Jede Phase bekommt einen eigenen Implementierungsplan; P1 ist der erste Plan.
 - **Scope-Creep:** 11 Crates sind viel. Disziplin: P1 zuerst voll lauffähig, dann erst P2.
 - **Name:** „Argus" ist Working-Name (Kollision mit existierendem Netzwerk-Tool ARGUS möglich) — Final-Brand vor Public-Release.
 - **„Echtzeit/Continuous":** in P1 als periodische Jobs, echtes Streaming erst P2.
+
+## 12. Prior Art & abgeschaute Techniken (Research 2026-06-03)
+
+Die Architektur fußt auf realem Verhalten der Referenzprodukte, nicht auf Annahmen.
+
+| Quelle | Reale Technik | Was wir konkret übernehmen |
+|---|---|---|
+| **Armis** Multi-Detection-Engine | 7 Methoden (Passive Inspection, Integrationen, NetworkMapper, Wireless LAN, Smart Active Query, Asset Intelligence Engine, Threat Intel) | Mehrquellen-Discovery als Architektur-Prinzip — keine Methode allein, alle fließen in **einen** Asset-Record |
+| **Armis** Smart Active Query | Aktiv aber **read-only**, **protokoll-nativ** (vendor-approved), nur bei niedriger Last → OT-sicher | `argus-discovery`: aktive Queries default read-only, protokoll-spezifisch statt generisch, opt-in mit Scope |
+| **Armis** Asset Intelligence Engine | Crowdsourced KB (5 Mrd. Assets) + Verhaltens-Baselines → Alert/Quarantäne | **Substitut:** Open-Fingerprint-DBs + trainierter Klassifikator (`argus-intel`); Baselines **per-Deployment** (`argus-behavior`) statt cross-customer |
+| **runZero** | Unauth active scan: nur „normaler" Traffic, **keine** malformed packets/Exploits, nur fingerprint-relevante Ports → OT-safe; **Subnet-Sampling** (Trickle in häufige Oktette je /24, nur antwortende Subnetze voll scannen) | `argus-discovery`: exakt dieses Safety-Modell + Subnet-Sampling-Algorithmus |
+| **Axonius** | Adapter-Framework (auth/session/retry/backoff, Freshness+Source-Metadaten); Pipeline **Correlate → Normalize → Enrich** → 1 deduplizierter Record | `argus-connectors` (Adapter-Muster) + `argus-ingest` (3-Stufen-Pipeline) + `argus-core` Dedup |
+| **NetBox** (Apache-2.0) | Postgres-Source-of-Truth, REST+GraphQL+Webhooks, Asset/IP/VLAN/Site-Schema | Datenmodell-Vorbild `argus-core`; GraphQL+Webhooks in `argus-api`; optionaler NetBox-Import-Connector |
+| **Netdisco / LibreNMS / Open-AudIT** | L2-Discovery via SNMP/ARP/LLDP/CDP → Topologie | `argus-discovery`: SNMP/LLDP/CDP-Modul für Switch-/Topologie-Erkennung |
+| **p0f v3 / PRADS / Satori** | Passives OS-Fingerprinting (TTL/TCP-Options/MSS/Window/DF; DHCP Option 55) | `argus-sensor`: p0f-Signatur-Ansatz + PRADS als Referenz für den passiven Sensor |
+| **Fingerbank** | Offene DHCP-Fingerprint-DB (Option 55 + MAC-OUI + UA) | `argus-intel`: primäre offene Fingerprint-Quelle (Lizenz/API-Terms prüfen) |
+| **Nmap** OS/Service-DB | Aktive Fingerprint-Signaturen | `argus-discovery`: **nur als externes Tool aufrufen** (⚠ NPSL — DB nicht bundlen/redistribuieren) |
+| **CVE_Prioritizer** / vuln-intel-mcp | Composite-Score aus CVSS + EPSS + KEV | `argus-vuln` + `argus-risk`: exakt dieses Blending |
+| **NVD API v2 / EPSS / CISA KEV** | CPE-Match (matchCriteriaId), KEV pro CVE, EPSS-Wahrscheinlichkeit | `argus-vuln`: Datenquellen für CVE↔Asset-Korrelation |
+| arXiv 2502.09084 | Tabular-Transformer für OS-Fingerprinting | Beleg + Ansatz für den trainierten Klassifikator in `argus-intel` |
+
+**Operative Realitäts-Notizen (in Risiken einfließen lassen):**
+- **NVD scort die meisten CVEs nicht mehr** (NVD = Triage-Queue). → Nicht allein auf NVD-Enrichment verlassen; **EPSS + KEV (+ OSV/Vulners)** sind Pflicht-Quellen in `argus-vuln`.
+- **Lizenzen:** Nmap-DB = NPSL (restriktiv, nur Tool-Aufruf), Fingerbank-DB/API-Terms prüfen, p0f = LGPL-nah. NetBox = Apache-2.0 (unkritisch).
+- **Armis interner Stack** nicht sauber verifizierbar (Such-Verwechslung mit gleichnamiger Retail-Firma) — irrelevant für unsere Stack-Wahl.
+
+## 13. Quellen
+
+- Armis Asset Intelligence Engine — https://www.armis.com/platform/armis-asset-intelligence-engine/
+- Armis Smart Active Querying — https://www.armis.com/platform/armis-centrix-smart-active-querying/ · https://www.armis.com/blog/armis-unleashes-smart-active-querying/
+- Armis OT-Scanning FAQ — https://www.armis.com/faq/what-is-ot-scanning/
+- runZero Discovery — https://help.runzero.com/docs/discovering-assets/ · https://www.runzero.com/blog/which-discovery-method-works-best-for-unmanaged-devices/
+- Axonius Asset-Intelligence-Pipeline — https://www.axonius.com/blog/behind-actionability-the-axonius-asset-intelligence-pipeline
+- NetBox (OSS DCIM/IPAM) — https://netboxlabs.com/blog/open-source-dcim-tools/
+- Fingerbank — http://obilodeau.github.io/slides/defcon19-fingerbank/ · p0f v3 — https://lcamtuf.coredump.cx/p0f3/ · Satori — https://github.com/xnih/satori/wiki
+- CVE_Prioritizer — https://github.com/TURROKS/CVE_Prioritizer · NVD-Scoring-Wandel — https://www.gblock.app/articles/nist-nvd-cve-enrichment-policy-change
+- ML-OS-Fingerprinting — https://arxiv.org/pdf/2502.09084
