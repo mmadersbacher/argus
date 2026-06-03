@@ -26,8 +26,14 @@ fn client() -> reqwest::Client {
 /// The authoritative CISA KEV CVE-id set (live). Empty on any failure.
 pub async fn fetch_kev() -> HashSet<String> {
     let attempt = async {
-        let json: serde_json::Value =
-            client().get(KEV_FEED).send().await.ok()?.json().await.ok()?;
+        let json: serde_json::Value = client()
+            .get(KEV_FEED)
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
         let set = json["vulnerabilities"]
             .as_array()?
             .iter()
@@ -90,7 +96,10 @@ pub async fn search(product: &str, limit: usize) -> Vec<Vulnerability> {
                 let (score, severity) = extract_cvss(&cve["metrics"]);
                 Some(Vulnerability {
                     cve_id: id,
-                    cvss: score.map(|s| Cvss { base_score: s, vector: None }),
+                    cvss: score.map(|s| Cvss {
+                        base_score: s,
+                        vector: None,
+                    }),
                     epss: None,
                     kev: false,
                     severity,
@@ -139,7 +148,10 @@ pub async fn enrich(mut vulns: Vec<Vulnerability>, products: &[String]) -> Vec<V
             v.kev = kev.contains(&v.cve_id);
         }
         if let Some(&score) = epss.get(&v.cve_id) {
-            v.epss = Some(Epss { score, percentile: score });
+            v.epss = Some(Epss {
+                score,
+                percentile: score,
+            });
         }
     }
     vulns
@@ -151,7 +163,8 @@ mod tests {
 
     #[test]
     fn extracts_cvss_from_v31() {
-        let metrics = serde_json::json!({ "cvssMetricV31": [{ "cvssData": { "baseScore": 9.8 } }] });
+        let metrics =
+            serde_json::json!({ "cvssMetricV31": [{ "cvssData": { "baseScore": 9.8 } }] });
         let (score, severity) = extract_cvss(&metrics);
         assert_eq!(severity, Severity::Critical);
         assert!((score.unwrap() - 9.8).abs() < 0.01);

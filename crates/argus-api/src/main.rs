@@ -188,11 +188,29 @@ async fn run_scan(
     let mut scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
     let live = scored.len();
     for asset in &mut scored {
+        // Refine classification from vendor + ports + services (argus-intel).
+        let cls = argus_intel::classify(&argus_intel::Features {
+            vendor: asset.asset.fingerprint.vendor.clone(),
+            open_ports: asset.services.iter().map(|s| s.port).collect(),
+            services: asset
+                .services
+                .iter()
+                .filter_map(|s| s.product.clone())
+                .collect(),
+            os: asset.asset.fingerprint.os.clone(),
+        });
+        asset.asset.asset_type = cls.asset_type;
+        asset.asset.fingerprint.device_type = Some(cls.device_type);
+        asset.asset.fingerprint.confidence = cls.confidence;
+
         // Live enrichment: NVD search for the asset's products + authoritative
         // CISA-KEV + current EPSS, then recompute risk. Best-effort (falls back
         // to the catalog-derived vulns/risk if the feeds are unavailable).
-        let products: Vec<String> =
-            asset.services.iter().filter_map(|s| s.product.clone()).collect();
+        let products: Vec<String> = asset
+            .services
+            .iter()
+            .filter_map(|s| s.product.clone())
+            .collect();
         let enriched =
             argus_vuln::nvd::enrich(std::mem::take(&mut asset.vulnerabilities), &products).await;
         asset.risk = argus_core::RiskScore::compute(&argus_vuln::risk_inputs(
