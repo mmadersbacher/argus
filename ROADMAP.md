@@ -12,8 +12,8 @@ Tracking the phased build from the design spec. Checkboxes are the live task lis
 - [ ] CI (GitHub Actions: fmt + clippy + test)
 
 ## P1 — Spine (demo-able, real)
-- [ ] `argus-discovery`: active scan via nmap/masscan/arp-scan
-      (runZero-style safety: normal traffic only, fingerprint-relevant ports, subnet sampling)
+- [x] `argus-discovery` (light): safe TCP-connect host/service scan + port→device heuristic + range cap + CLI
+- [ ] `argus-discovery` (deep): nmap/masscan orchestration, subnet sampling, banner & OS fingerprinting
 - [ ] ingest pipeline → asset inventory with dedup (MAC → IP → hostname)
 - [ ] basic fingerprinting: MAC-OUI + nmap service/OS
 - [ ] `argus-vuln`: CPE match against NVD + EPSS + CISA KEV
