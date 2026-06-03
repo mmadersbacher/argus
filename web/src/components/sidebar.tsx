@@ -1,4 +1,5 @@
 import { Icon, type IconName } from "@/components/icon";
+import { ArgusMark } from "@/components/argus-mark";
 
 const nav: { label: string; icon: IconName; active?: boolean; dot?: boolean }[] = [
   { label: "Overview", icon: "grid", active: true },
@@ -15,7 +16,7 @@ export function Sidebar() {
       {/* brand mark */}
       <div className="mb-5 flex flex-col items-center gap-1.5">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white shadow-lg shadow-black/40">
-          <Icon name="eye" size={22} />
+          <ArgusMark size={24} />
         </div>
         <span className="text-[10px] font-semibold tracking-[0.2em] text-sidebar-fg">
           ARGUS

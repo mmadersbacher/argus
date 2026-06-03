@@ -9,19 +9,19 @@
   --color-fg: #1b1f2a; /* primary text */
   --color-muted: #6b7280; /* secondary text */
 
-  --color-accent: #e11d2a; /* brand red */
-  --color-accent-2: #b00f1c; /* deep red */
+  --color-accent: #2563eb; /* brand — royal blue */
+  --color-accent-2: #1d4ed8; /* deeper blue (hover) */
 
-  /* dark-red rail (was Armis deep purple) */
-  --color-sidebar: #490d16;
-  --color-sidebar-2: #631522; /* active item panel */
-  --color-sidebar-fg: #e8c4c9; /* idle label */
-  --color-sidebar-icon: #f0a6ae; /* idle icon */
+  /* deep navy rail (was Armis deep purple) */
+  --color-sidebar: #0f1e3d;
+  --color-sidebar-2: #1c3257; /* active item panel */
+  --color-sidebar-fg: #aebfd8; /* idle label */
+  --color-sidebar-icon: #7e9bc7; /* idle icon */
 
   --color-crit: #dc2626;
   --color-high: #ea580c;
   --color-med: #d97706;
-  --color-low: #2563eb;
+  --color-low: #0ea5e9; /* sky — distinct from the royal-blue brand */
   --color-info: #64748b;
 
   --font-sans: var(--font-geist-sans);
