@@ -94,7 +94,14 @@ pub async fn scan(
 }
 
 /// Parse nmap XML (`-oX`) into discovered hosts.
-fn parse(xml: &str) -> Result<Vec<DiscoveredHost>, NmapError> {
+///
+/// Public so external `nmap -oX` exports can be imported, not only live scans.
+/// Unlike [`scan`], this does not run ARP/OUI enrichment — imported XML carries
+/// its own MAC/vendor data and the local ARP cache would not apply to it.
+///
+/// # Errors
+/// Returns [`NmapError::Parse`] if the input is not valid nmap XML.
+pub fn parse(xml: &str) -> Result<Vec<DiscoveredHost>, NmapError> {
     // nmap emits `<!DOCTYPE nmaprun>`, so DTDs must be allowed.
     let opts = roxmltree::ParsingOptions {
         allow_dtd: true,

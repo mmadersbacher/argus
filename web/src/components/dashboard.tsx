@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getAssets,
   getSummary,
+  importNmap,
   runScan,
   type AssetType,
   type RiskBand,
@@ -159,6 +160,21 @@ export function Dashboard() {
     }
   };
 
+  const onImport = async (file: File) => {
+    setScanning(true);
+    setScanNote(null);
+    try {
+      const xml = await file.text();
+      const r = await importNmap(xml);
+      await load();
+      setScanNote(`imported ${r.imported} host${r.imported === 1 ? "" : "s"} from nmap XML`);
+    } catch (e) {
+      setScanNote(e instanceof Error ? e.message : "import failed");
+    } finally {
+      if (mounted.current) setScanning(false);
+    }
+  };
+
   if (loading) return <DashboardSkeleton />;
   if (error) return <ErrorState message={error} />;
 
@@ -231,6 +247,19 @@ export function Dashboard() {
           >
             {scanning ? "Scanning…" : "Run scan"}
           </button>
+          <label className="cursor-pointer rounded-lg border border-line px-4 py-1.5 text-sm font-medium text-fg transition hover:bg-surface-2">
+            Import nmap XML
+            <input
+              type="file"
+              accept=".xml,text/xml"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onImport(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
           {scanNote && <span className="text-xs text-muted">{scanNote}</span>}
           <span className="ml-auto text-xs text-muted">connect-scan · authorized targets only</span>
         </section>

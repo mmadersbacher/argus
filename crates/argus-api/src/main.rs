@@ -73,6 +73,7 @@ fn router(state: AppState) -> Router {
         .route("/api/assets/{id}", get(get_asset))
         .route("/api/summary", get(summary))
         .route("/api/scan", post(run_scan))
+        .route("/api/import/nmap", post(import_nmap))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -185,8 +186,27 @@ async fn run_scan(
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    let live = ingest(&state.pool, hosts).await?;
+
+    tracing::info!(target = %target, engine, hosts = ips.len(), live, "scan complete");
+    Ok(Json(ScanResponse {
+        target,
+        engine,
+        hosts_scanned: ips.len(),
+        live,
+        duration_ms,
+    }))
+}
+
+/// Persist discovered hosts: classify (argus-intel), enrich with live CVE
+/// intelligence (NVD/KEV/EPSS), recompute risk, and upsert into the inventory.
+/// Shared by live scans and the nmap-XML import.
+async fn ingest(
+    pool: &PgPool,
+    hosts: Vec<argus_discovery::DiscoveredHost>,
+) -> Result<usize, (StatusCode, String)> {
     let mut scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
-    let live = scored.len();
+    let n = scored.len();
     for asset in &mut scored {
         // Refine classification from vendor + ports + services (argus-intel).
         let cls = argus_intel::classify(&argus_intel::Features {
@@ -219,15 +239,37 @@ async fn run_scan(
             asset.asset.criticality,
         ));
         asset.vulnerabilities = enriched;
-        db::upsert(&state.pool, asset).await.map_err(db_error)?;
+        db::upsert(pool, asset).await.map_err(db_error)?;
     }
+    Ok(n)
+}
 
-    tracing::info!(target = %target, engine, hosts = ips.len(), live, "scan complete");
-    Ok(Json(ScanResponse {
-        target,
-        engine,
-        hosts_scanned: ips.len(),
-        live,
-        duration_ms,
+#[derive(Serialize)]
+struct ImportResponse {
+    source: &'static str,
+    imported: usize,
+}
+
+/// Import an external `nmap -oX` XML export (raw request body) into the inventory.
+///
+/// Parsed into hosts and run through the same classify → enrich → score → upsert
+/// pipeline as a live scan, then deduplicated by correlation key on upsert.
+async fn import_nmap(
+    State(state): State<AppState>,
+    body: String,
+) -> Result<Json<ImportResponse>, (StatusCode, String)> {
+    if body.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "empty body — POST the output of `nmap -oX -`".to_owned(),
+        ));
+    }
+    let hosts = argus_discovery::nmap::parse(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("nmap XML: {e}")))?;
+    let imported = ingest(&state.pool, hosts).await?;
+    tracing::info!(imported, "nmap import complete");
+    Ok(Json(ImportResponse {
+        source: "nmap-xml",
+        imported,
     }))
 }

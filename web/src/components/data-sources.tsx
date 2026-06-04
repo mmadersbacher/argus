@@ -41,6 +41,7 @@ export function DataSources({
 
   const connected: { name: string; sub: string; icon: IconName; metric: string }[] = [
     { name: "Active Discovery", sub: "nmap · connect scan", icon: "search", metric: `${total} assets` },
+    { name: "Nmap Import", sub: "scanner XML upload", icon: "server", metric: "file import" },
     { name: "NVD", sub: "NIST CVE feed", icon: "alert", metric: `${cves.size} CVEs` },
     { name: "CISA KEV", sub: "known exploited", icon: "shield", metric: `${kev} flagged` },
     { name: "EPSS", sub: "FIRST.org", icon: "activity", metric: "exploit prob." },

@@ -108,3 +108,15 @@ export const runScan = (target: string) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ target }),
   });
+
+export interface ImportResult {
+  source: string;
+  imported: number;
+}
+
+export const importNmap = (xml: string) =>
+  fetchJSON<ImportResult>("/api/import/nmap", {
+    method: "POST",
+    headers: { "content-type": "text/xml" },
+    body: xml,
+  });
