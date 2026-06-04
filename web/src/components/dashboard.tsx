@@ -19,6 +19,7 @@ import {
 import { Icon, type IconName } from "@/components/icon";
 import { RiskBadge } from "@/components/risk-badge";
 import { AssetDrawer } from "@/components/asset-drawer";
+import { DataSources } from "@/components/data-sources";
 
 const typeIcon: Record<AssetType, IconName> = {
   it: "server",
@@ -302,6 +303,9 @@ export function Dashboard() {
           ))}
         </div>
       </section>
+
+      {/* data sources */}
+      <DataSources assets={assets} summary={summary} />
 
       {/* asset list */}
       <section className="overflow-hidden rounded-xl border border-line bg-surface">
