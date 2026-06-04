@@ -1,26 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  getAssets,
-  getSummary,
   importNmap,
   runScan,
   type AssetType,
   type RiskBand,
   type ScoredAsset,
-  type Summary,
 } from "@/lib/api";
-import {
-  assetTypeLabel,
-  bandOrder,
-  bandStyles,
-  exposureLabel,
-} from "@/lib/ui";
+import { assetTypeLabel, bandOrder, bandStyles, exposureLabel } from "@/lib/ui";
+import { useInventory } from "@/lib/use-inventory";
 import { Icon, type IconName } from "@/components/icon";
 import { RiskBadge } from "@/components/risk-badge";
 import { AssetDrawer } from "@/components/asset-drawer";
-import { DataSources } from "@/components/data-sources";
+import { ErrorState, LoadingState } from "@/components/states";
 
 const typeIcon: Record<AssetType, IconName> = {
   it: "server",
@@ -34,35 +27,6 @@ const typeIcon: Record<AssetType, IconName> = {
 };
 
 type Filter = { kind: "type"; value: AssetType } | { kind: "band"; value: RiskBand };
-
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-6">
-      <div className="h-9 w-40 animate-pulse rounded-lg bg-surface" />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-xl border border-line bg-surface" />
-        ))}
-      </div>
-      <div className="h-80 animate-pulse rounded-xl border border-line bg-surface" />
-    </div>
-  );
-}
-
-function ErrorState({ message }: { message: string }) {
-  return (
-    <div className="rounded-xl border border-crit/30 bg-crit/5 p-6">
-      <div className="flex items-center gap-2 font-medium text-crit">
-        <span className="h-2 w-2 rounded-full bg-crit" /> argus-api unreachable
-      </div>
-      <p className="mt-2 text-sm text-muted">{message}</p>
-      <p className="mt-3 font-mono text-xs text-muted">
-        Start it with <span className="text-fg">cargo run -p argus-api</span> (expects
-        http://127.0.0.1:8088)
-      </p>
-    </div>
-  );
-}
 
 /** A grouped-by card: icon tile + title + count + "Show Details". */
 function GroupCard({
@@ -104,11 +68,8 @@ function GroupCard({
   );
 }
 
-export function Dashboard() {
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [assets, setAssets] = useState<ScoredAsset[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+export function AssetsView() {
+  const { summary, assets, error, loading, reload } = useInventory();
   const [selected, setSelected] = useState<ScoredAsset | null>(null);
   const [target, setTarget] = useState("127.0.0.1");
   const [scanning, setScanning] = useState(false);
@@ -120,38 +81,19 @@ export function Dashboard() {
   const [showScan, setShowScan] = useState(false);
   const mounted = useRef(true);
 
-  const load = useCallback(async () => {
-    try {
-      const [s, a] = await Promise.all([getSummary(), getAssets()]);
-      if (!mounted.current) return;
-      setSummary(s);
-      setAssets(a);
-      setError(null);
-    } catch (e) {
-      if (mounted.current) {
-        setError(e instanceof Error ? e.message : "Failed to reach argus-api");
-      }
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     mounted.current = true;
-    void load();
-    const id = setInterval(() => void load(), 15000);
     return () => {
       mounted.current = false;
-      clearInterval(id);
     };
-  }, [load]);
+  }, []);
 
   const onScan = async () => {
     setScanning(true);
     setScanNote(null);
     try {
       const r = await runScan(target.trim() || "127.0.0.1");
-      await load();
+      await reload();
       setScanNote(`${r.live} live · ${r.hosts_scanned} scanned · ${r.duration_ms} ms`);
     } catch (e) {
       setScanNote(e instanceof Error ? e.message : "scan failed");
@@ -166,7 +108,7 @@ export function Dashboard() {
     try {
       const xml = await file.text();
       const r = await importNmap(xml);
-      await load();
+      await reload();
       setScanNote(`imported ${r.imported} host${r.imported === 1 ? "" : "s"} from nmap XML`);
     } catch (e) {
       setScanNote(e instanceof Error ? e.message : "import failed");
@@ -175,7 +117,7 @@ export function Dashboard() {
     }
   };
 
-  if (loading) return <DashboardSkeleton />;
+  if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
 
   const byType = (Object.keys(assetTypeLabel) as AssetType[])
@@ -332,9 +274,6 @@ export function Dashboard() {
           ))}
         </div>
       </section>
-
-      {/* data sources */}
-      <DataSources assets={assets} summary={summary} />
 
       {/* asset list */}
       <section className="overflow-hidden rounded-xl border border-line bg-surface">
