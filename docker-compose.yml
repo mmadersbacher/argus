@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: argus
       POSTGRES_DB: argus
     volumes:
-      - argus-pgdata:/var/lib/postgresql/data
+      # postgres:18+ stores data in a major-version subdir; mount the parent,
+      # not /data (the old convention), or the container refuses to start.
+      - argus-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
       interval: 5s
