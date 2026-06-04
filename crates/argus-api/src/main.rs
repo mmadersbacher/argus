@@ -123,6 +123,9 @@ async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, (Status
 #[derive(Deserialize)]
 struct ScanRequest {
     target: Option<String>,
+    /// Privileged deep scan: masscan high-speed sweep + nmap SYN/OS detection.
+    /// Needs root; falls back to the standard scan when unavailable.
+    deep: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -143,15 +146,39 @@ async fn run_scan(
     State(state): State<AppState>,
     body: Option<Json<ScanRequest>>,
 ) -> Result<Json<ScanResponse>, (StatusCode, String)> {
-    let target = body
-        .and_then(|b| b.0.target)
-        .unwrap_or_else(|| "127.0.0.1".to_owned());
+    let req = body.map_or(
+        ScanRequest {
+            target: None,
+            deep: None,
+        },
+        |b| b.0,
+    );
+    let target = req.target.unwrap_or_else(|| "127.0.0.1".to_owned());
+    let deep = req.deep.unwrap_or(false);
 
     let ips =
         argus_discovery::expand(&target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
     let started = Instant::now();
-    let (engine, hosts) = if argus_discovery::nmap::available().await {
+
+    // Deep scan first when requested: masscan high-speed sweep + nmap SYN/OS
+    // detail (both need root). Best-effort — an empty result (unprivileged, or
+    // nothing live) falls through to the standard nmap/connect path below.
+    let deep_hosts = if deep {
+        argus_discovery::deep_scan(
+            &target,
+            argus_discovery::fingerprint::PORTS,
+            argus_discovery::masscan::DEFAULT_RATE,
+            Duration::from_secs(120),
+        )
+        .await
+    } else {
+        Vec::new()
+    };
+
+    let (engine, hosts) = if !deep_hosts.is_empty() {
+        ("masscan+nmap-os", deep_hosts)
+    } else if argus_discovery::nmap::available().await {
         match argus_discovery::nmap::scan(
             &target,
             argus_discovery::fingerprint::PORTS,

@@ -53,12 +53,54 @@ pub async fn available() -> bool {
 
 /// Run nmap against `spec` (IP/CIDR/host) restricted to `ports`, returning hosts.
 ///
-/// Uses a TCP connect scan with light service/version detection, which needs
-/// no elevated privileges.
+/// Uses a TCP connect scan with light service/version detection, which needs no
+/// elevated privileges.
+///
+/// # Errors
+/// See [`NmapError`].
 pub async fn scan(
     spec: &str,
     ports: &[u16],
     run_timeout: Duration,
+) -> Result<Vec<DiscoveredHost>, NmapError> {
+    run(
+        spec,
+        ports,
+        run_timeout,
+        &["-sT", "-sV", "--version-light", "-T4"],
+    )
+    .await
+}
+
+/// Run nmap with a SYN scan and OS detection (`-sS -O`) against `spec`.
+///
+/// Both flags send raw packets, so this needs root / `cap_net_raw`. Matched
+/// hosts carry an `os` fingerprint (parsed from `<osmatch>`); without privileges
+/// nmap cannot OS-match and [`scan`] is the better choice.
+///
+/// # Errors
+/// See [`NmapError`].
+pub async fn scan_os(
+    spec: &str,
+    ports: &[u16],
+    run_timeout: Duration,
+) -> Result<Vec<DiscoveredHost>, NmapError> {
+    run(
+        spec,
+        ports,
+        run_timeout,
+        &["-sS", "-sV", "--version-light", "-O", "-T4"],
+    )
+    .await
+}
+
+/// Shared nmap runner. `scan_args` selects the scan type (connect vs SYN+OS);
+/// the rest of the invocation (`-n -p … -oX -`) and XML parsing is common.
+async fn run(
+    spec: &str,
+    ports: &[u16],
+    run_timeout: Duration,
+    scan_args: &[&str],
 ) -> Result<Vec<DiscoveredHost>, NmapError> {
     let port_list = ports
         .iter()
@@ -68,18 +110,8 @@ pub async fn scan(
     let output = timeout(
         run_timeout,
         Command::new("nmap")
-            .args([
-                "-sT",
-                "-sV",
-                "--version-light",
-                "-T4",
-                "-n",
-                "-p",
-                &port_list,
-                "-oX",
-                "-",
-                spec,
-            ])
+            .args(scan_args)
+            .args(["-n", "-p", &port_list, "-oX", "-", spec])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output(),

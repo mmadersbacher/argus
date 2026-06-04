@@ -23,7 +23,7 @@ multi-week work.
 - [x] `argus-vuln`: CVE correlation (catalog + version matching) → CVSS / EPSS / KEV → risk inputs
 - [x] `argus-risk`: composite exposure score on every asset (seed + discovered)
 - [x] web: metrics, risk distribution, SVG asset map, device-detail drawer with CVEs, Run-scan wiring, table CVE indicators
-- [ ] `argus-discovery` (deep, root): masscan high-speed + `nmap -O` OS detection (needs sudo)
+- [x] `argus-discovery` (deep, root): masscan high-speed sweep + `nmap -sS -O` OS detection, wired into `POST /api/scan` via `{"deep":true}` (needs root)
 
 ## P2 — Intelligence (remaining vision)
 - [ ] `argus-sensor`: passive sensing (p0f/Zeek-style signatures)

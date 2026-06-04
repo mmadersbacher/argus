@@ -2,12 +2,14 @@
 //!
 //! Light active discovery for Argus: a safe, unauthenticated TCP-connect scan
 //! that finds live hosts and open services without raw sockets or root, an
-//! optional `nmap` backend for real service/version fingerprints, MAC/vendor
-//! enrichment from the ARP cache, and runZero-style subnet sampling. Deeper
-//! features (masscan, OS detection, passive sensing) get layered on top later.
+//! optional `nmap` backend for real service/version fingerprints (incl. `-O` OS
+//! detection when run as root), MAC/vendor enrichment from the ARP cache,
+//! runZero-style subnet sampling, and an optional masscan high-speed SYN sweep
+//! for large ranges. Passive sensing gets layered on top later.
 
 pub mod arp;
 pub mod fingerprint;
+pub mod masscan;
 pub mod nmap;
 pub mod oui;
 pub mod portscan;
@@ -114,6 +116,39 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
         live,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
+}
+
+/// Deep, privileged scan: masscan sweep, then nmap SYN + OS detail.
+///
+/// A masscan high-speed SYN sweep finds live host:port pairs, then
+/// [`nmap::scan_os`] re-probes only the responsive hosts — fast wide discovery,
+/// accurate narrow fingerprinting.
+///
+/// Both stages need raw-socket privileges (root / `cap_net_raw`). This is
+/// best-effort: if masscan finds nothing (e.g. run unprivileged) or nmap fails,
+/// it returns an empty vector and the caller should fall back to [`scan`] or the
+/// nmap connect scan.
+pub async fn deep_scan(
+    spec: &str,
+    ports: &[u16],
+    rate: u32,
+    run_timeout: Duration,
+) -> Vec<DiscoveredHost> {
+    let Ok(sweep) = masscan::sweep(spec, ports, rate, run_timeout).await else {
+        return Vec::new();
+    };
+    if sweep.is_empty() {
+        return Vec::new();
+    }
+    // Re-probe only the responsive hosts with nmap for service + OS detail.
+    let live = sweep
+        .iter()
+        .map(|h| h.ip.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    nmap::scan_os(&live, ports, run_timeout)
+        .await
+        .unwrap_or_default()
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
