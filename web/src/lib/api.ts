@@ -88,6 +88,8 @@ export interface ScanResult {
   hosts_scanned: number;
   live: number;
   duration_ms: number;
+  /** Change events recorded by diffing this scan against the inventory. */
+  changes: number;
 }
 
 export const API_BASE =
@@ -221,4 +223,84 @@ export const importNmap = (xml: string) =>
     method: "POST",
     headers: { "content-type": "text/xml" },
     body: xml,
+  });
+
+// ---- monitoring & change events ---------------------------------------------
+
+export type EventKind =
+  | "asset.new"
+  | "services.changed"
+  | "vulns.changed"
+  | "risk.changed";
+
+export interface AssetNewDetail {
+  risk: number;
+  band: RiskBand;
+  services: number;
+}
+
+export interface ServiceDelta {
+  port: number;
+  product: string | null;
+}
+
+export interface ServicesChangedDetail {
+  added: ServiceDelta[];
+  removed: ServiceDelta[];
+}
+
+export interface VulnsChangedDetail {
+  added: string[];
+  removed: string[];
+  kev_added: number;
+}
+
+export interface RiskChangedDetail {
+  old: number;
+  new: number;
+  old_band: RiskBand;
+  new_band: RiskBand;
+}
+
+interface EventBase {
+  id: number;
+  dedup_key: string;
+  asset_name: string;
+  /** RFC3339, like first_seen/last_seen. */
+  created_at: string;
+}
+
+/** Change event from /api/events — discriminated on `kind` so `detail` is
+ *  fully typed per event kind. */
+export type ArgusEvent = EventBase &
+  (
+    | { kind: "asset.new"; detail: AssetNewDetail }
+    | { kind: "services.changed"; detail: ServicesChangedDetail }
+    | { kind: "vulns.changed"; detail: VulnsChangedDetail }
+    | { kind: "risk.changed"; detail: RiskChangedDetail }
+  );
+
+/** Newest first; the API clamps limit to 1..=200 (default 50). */
+export const fetchEvents = (limit = 50) =>
+  fetchJSON<ArgusEvent[]>(`/api/events?limit=${limit}`);
+
+export interface MonitorSettings {
+  target: string;
+  interval_minutes: number;
+  enabled: boolean;
+  deep: boolean;
+}
+
+export type MonitorConfig =
+  | { configured: false }
+  | ({ configured: true; last_run_at: string | null } & MonitorSettings);
+
+export const fetchMonitor = () => fetchJSON<MonitorConfig>("/api/monitor");
+
+/** Requires analyst or higher; 400 carries the validation error as text. */
+export const saveMonitor = (cfg: MonitorSettings) =>
+  fetchJSON<MonitorConfig>("/api/monitor", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(cfg),
   });

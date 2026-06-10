@@ -11,10 +11,40 @@ use std::sync::{Arc, Mutex};
 
 use argus_core::tenant::Role;
 use sqlx::PgPool;
+use time::OffsetDateTime;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
-use crate::db::{self, ApiKeyRow, UserRow};
+use crate::db::{self, ApiKeyRow, DueMonitor, EventRow, MonitorRow, UserRow};
 use crate::seed::ScoredAsset;
+
+/// Memory-store retention cap: newest events kept per tenant. The in-memory
+/// `events` Vec would otherwise grow unbounded across a long-running process.
+const MAX_MEMORY_EVENTS_PER_TENANT: usize = 1000;
+
+/// Per-tenant ingest serialization registry.
+///
+/// `ingest` holds the per-tenant guard for its whole body, so a manual
+/// `POST /api/scan` and a scheduled run for the SAME tenant cannot interleave
+/// (which would let one advance the diff baseline while the other reads a stale
+/// one, duplicating events). Different tenants never block each other.
+#[derive(Clone, Default)]
+pub struct IngestLocks(Arc<Mutex<HashMap<Uuid, Arc<AsyncMutex<()>>>>>);
+
+impl IngestLocks {
+    /// Acquire the per-tenant ingest lock, creating it on first use. The
+    /// returned guard must be held for the entire ingest body.
+    pub async fn lock(&self, tenant: Uuid) -> OwnedMutexGuard<()> {
+        let mutex = {
+            let mut map = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Arc::clone(map.entry(tenant).or_default())
+        };
+        mutex.lock_owned().await
+    }
+}
 
 /// A storage failure mapped to an HTTP-friendly shape.
 #[derive(Debug)]
@@ -307,6 +337,52 @@ impl Store {
         }
     }
 
+    /// Atomically upsert one asset and record its change events.
+    ///
+    /// For Postgres this runs the asset upsert and all event inserts in ONE
+    /// transaction; for the memory store both happen under the single mutex.
+    /// This keeps the diff baseline (the stored asset) from advancing without
+    /// its events also being persisted — so a crash or a concurrent scan can't
+    /// leave the baseline ahead of the event feed.
+    pub async fn commit_asset(
+        &self,
+        tenant_id: Uuid,
+        asset: &ScoredAsset,
+        events: &[(&str, &serde_json::Value)],
+        dedup_key: &str,
+        asset_name: &str,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                db::commit_asset(pool, tenant_id, asset, events, dedup_key, asset_name).await?;
+                Ok(())
+            }
+            Self::Memory(m) => {
+                let body = serde_json::to_value(asset).expect("ScoredAsset serializes");
+                let mut inner = m.lock();
+                inner
+                    .assets
+                    .insert((tenant_id, dedup_key.to_owned()), (body, asset.risk.value));
+                for (kind, detail) in events {
+                    inner.next_event_id += 1;
+                    let id = inner.next_event_id;
+                    inner.events.push(MemEvent {
+                        id,
+                        tenant_id,
+                        dedup_key: dedup_key.to_owned(),
+                        asset_name: asset_name.to_owned(),
+                        kind: (*kind).to_owned(),
+                        detail: (*detail).clone(),
+                        created_at: OffsetDateTime::now_utc(),
+                    });
+                }
+                inner.cap_events(tenant_id);
+                drop(inner);
+                Ok(())
+            }
+        }
+    }
+
     /// Load a tenant's full inventory, highest risk first.
     pub async fn load_all(&self, tenant_id: Uuid) -> Result<Vec<ScoredAsset>, StoreError> {
         match self {
@@ -324,6 +400,192 @@ impl Store {
                     .into_iter()
                     .filter_map(|(body, _)| serde_json::from_value(body).ok())
                     .collect())
+            }
+        }
+    }
+
+    /// Load a single asset by its correlation key, if present.
+    pub async fn load_one(
+        &self,
+        tenant_id: Uuid,
+        dedup_key: &str,
+    ) -> Result<Option<ScoredAsset>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::load_one(pool, tenant_id, dedup_key).await?),
+            Self::Memory(m) => Ok(m
+                .lock()
+                .assets
+                .get(&(tenant_id, dedup_key.to_owned()))
+                .and_then(|(body, _)| serde_json::from_value(body.clone()).ok())),
+        }
+    }
+
+    // ---- change events & monitors ------------------------------------------
+
+    /// Record one change event for an asset.
+    pub async fn record_event(
+        &self,
+        tenant_id: Uuid,
+        dedup_key: &str,
+        asset_name: &str,
+        kind: &str,
+        detail: &serde_json::Value,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                db::record_event(pool, tenant_id, dedup_key, asset_name, kind, detail).await?;
+                Ok(())
+            }
+            Self::Memory(m) => {
+                let mut inner = m.lock();
+                inner.next_event_id += 1;
+                let id = inner.next_event_id;
+                inner.events.push(MemEvent {
+                    id,
+                    tenant_id,
+                    dedup_key: dedup_key.to_owned(),
+                    asset_name: asset_name.to_owned(),
+                    kind: kind.to_owned(),
+                    detail: detail.clone(),
+                    created_at: OffsetDateTime::now_utc(),
+                });
+                inner.cap_events(tenant_id);
+                drop(inner);
+                Ok(())
+            }
+        }
+    }
+
+    /// Prune stored change events to bound their growth.
+    ///
+    /// Postgres deletes events older than `retention_days` and returns the
+    /// count removed. The memory store ignores the age window (it has no
+    /// persistence to bound over time) and instead caps each tenant to the
+    /// newest [`MAX_MEMORY_EVENTS_PER_TENANT`] events; it returns `0`.
+    pub async fn prune_events(&self, retention_days: i64) -> Result<u64, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::prune_events(pool, retention_days).await?),
+            Self::Memory(m) => {
+                let mut inner = m.lock();
+                let tenants: Vec<Uuid> = {
+                    let mut t: Vec<Uuid> = inner.events.iter().map(|e| e.tenant_id).collect();
+                    t.sort_unstable();
+                    t.dedup();
+                    t
+                };
+                for tenant_id in tenants {
+                    inner.cap_events(tenant_id);
+                }
+                drop(inner);
+                Ok(0)
+            }
+        }
+    }
+
+    /// List a tenant's most recent change events, newest first.
+    pub async fn list_events(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::list_events(pool, tenant_id, limit).await?),
+            Self::Memory(m) => {
+                let take = usize::try_from(limit).unwrap_or(0);
+                Ok(m.lock()
+                    .events
+                    .iter()
+                    .rev() // insertion order is oldest-first
+                    .filter(|e| e.tenant_id == tenant_id)
+                    .take(take)
+                    .map(|e| EventRow {
+                        id: e.id,
+                        kind: e.kind.clone(),
+                        dedup_key: e.dedup_key.clone(),
+                        asset_name: e.asset_name.clone(),
+                        detail: e.detail.clone(),
+                        created_at: e.created_at,
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    /// Fetch a tenant's monitor configuration, if one was ever saved.
+    pub async fn get_monitor(&self, tenant_id: Uuid) -> Result<Option<MonitorRow>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::get_monitor(pool, tenant_id).await?),
+            Self::Memory(m) => Ok(m.lock().monitors.get(&tenant_id).map(|mon| MonitorRow {
+                target: mon.target.clone(),
+                interval_minutes: mon.interval_minutes,
+                enabled: mon.enabled,
+                deep: mon.deep,
+                last_run_at: mon.last_run_at,
+            })),
+        }
+    }
+
+    /// Create or replace a tenant's monitor (`last_run_at` is preserved).
+    pub async fn set_monitor(
+        &self,
+        tenant_id: Uuid,
+        target: &str,
+        interval_minutes: i32,
+        enabled: bool,
+        deep: bool,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                db::set_monitor(pool, tenant_id, target, interval_minutes, enabled, deep).await?;
+                Ok(())
+            }
+            Self::Memory(m) => {
+                let mut inner = m.lock();
+                let last_run_at = inner
+                    .monitors
+                    .get(&tenant_id)
+                    .and_then(|mon| mon.last_run_at);
+                inner.monitors.insert(
+                    tenant_id,
+                    MemMonitor {
+                        target: target.to_owned(),
+                        interval_minutes,
+                        enabled,
+                        deep,
+                        last_run_at,
+                    },
+                );
+                drop(inner);
+                Ok(())
+            }
+        }
+    }
+
+    /// Atomically claim every monitor that is due for a run, stamping its
+    /// `last_run_at` *before* the scan so overlapping runs cannot start.
+    pub async fn claim_due_monitors(&self) -> Result<Vec<DueMonitor>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::claim_due_monitors(pool).await?),
+            Self::Memory(m) => {
+                let now = OffsetDateTime::now_utc();
+                let mut due = Vec::new();
+                let mut inner = m.lock();
+                for (tenant_id, mon) in &mut inner.monitors {
+                    let is_due = mon.enabled
+                        && mon.last_run_at.is_none_or(|last| {
+                            last + time::Duration::minutes(i64::from(mon.interval_minutes)) <= now
+                        });
+                    if is_due {
+                        mon.last_run_at = Some(now);
+                        due.push(DueMonitor {
+                            tenant_id: *tenant_id,
+                            target: mon.target.clone(),
+                            deep: mon.deep,
+                        });
+                    }
+                }
+                drop(inner);
+                Ok(due)
             }
         }
     }
@@ -356,6 +618,37 @@ struct MemInner {
     /// Keyed by `(tenant_id, dedup_key)`; value is `(json body, risk)`.
     assets: HashMap<(Uuid, String), (serde_json::Value, f32)>,
     audit: Vec<MemAudit>,
+    /// Change events, oldest first (mirrors the BIGSERIAL insertion order).
+    events: Vec<MemEvent>,
+    /// Last assigned event id (mirrors the Postgres BIGSERIAL).
+    next_event_id: i64,
+    /// One monitor per tenant, like the `monitors` table's tenant_id PK.
+    monitors: HashMap<Uuid, MemMonitor>,
+}
+
+impl MemInner {
+    /// Drop a tenant's oldest events beyond [`MAX_MEMORY_EVENTS_PER_TENANT`],
+    /// keeping the newest. `events` is global and oldest-first, so we count the
+    /// tenant's rows and retain only those at-or-after the cutoff index.
+    fn cap_events(&mut self, tenant_id: Uuid) {
+        let count = self
+            .events
+            .iter()
+            .filter(|e| e.tenant_id == tenant_id)
+            .count();
+        if count <= MAX_MEMORY_EVENTS_PER_TENANT {
+            return;
+        }
+        let mut to_drop = count - MAX_MEMORY_EVENTS_PER_TENANT;
+        self.events.retain(|e| {
+            if e.tenant_id == tenant_id && to_drop > 0 {
+                to_drop -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 struct MemTenant {
@@ -381,6 +674,24 @@ struct MemAudit {
     action: String,
     #[allow(dead_code)]
     detail: serde_json::Value,
+}
+
+struct MemEvent {
+    id: i64,
+    tenant_id: Uuid,
+    dedup_key: String,
+    asset_name: String,
+    kind: String,
+    detail: serde_json::Value,
+    created_at: OffsetDateTime,
+}
+
+struct MemMonitor {
+    target: String,
+    interval_minutes: i32,
+    enabled: bool,
+    deep: bool,
+    last_run_at: Option<OffsetDateTime>,
 }
 
 fn clone_user(u: &UserRow) -> UserRow {
@@ -471,5 +782,132 @@ mod tests {
         assert_eq!(found.role, Role::Analyst);
         assert!(store.delete_api_key(tenant, id).await.unwrap());
         assert!(store.find_api_key("hash123").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn load_one_finds_upserted_asset_by_dedup_key() {
+        let store = Store::memory();
+        let tenant = Uuid::new_v4();
+        let asset = crate::seed::seed_assets().into_iter().next().unwrap();
+        let key = asset.asset.dedup_key();
+        assert!(store.load_one(tenant, &key).await.unwrap().is_none());
+        store.upsert(tenant, &asset).await.unwrap();
+        let loaded = store.load_one(tenant, &key).await.unwrap().unwrap();
+        assert_eq!(loaded.asset.dedup_key(), key);
+        // Other tenants must not see it.
+        assert!(store
+            .load_one(Uuid::new_v4(), &key)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn events_are_tenant_scoped_newest_first_and_limited() {
+        let store = Store::memory();
+        let t1 = Uuid::new_v4();
+        let t2 = Uuid::new_v4();
+        for i in 0..3 {
+            store
+                .record_event(
+                    t1,
+                    "ip:10.0.0.5",
+                    "web-01",
+                    "vulns.changed",
+                    &serde_json::json!({ "added": [format!("CVE-2024-{i}")], "removed": [], "kev_added": 0 }),
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .record_event(
+                t2,
+                "ip:10.0.0.9",
+                "db-01",
+                "asset.new",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+
+        // t2 sees only its own event.
+        let other = store.list_events(t2, 50).await.unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].kind, "asset.new");
+
+        // Newest first: ids strictly descending.
+        let events = store.list_events(t1, 50).await.unwrap();
+        assert_eq!(events.len(), 3);
+        for pair in events.windows(2) {
+            assert!(pair[0].id > pair[1].id);
+        }
+        assert_eq!(events[0].asset_name, "web-01");
+        assert_eq!(events[0].dedup_key, "ip:10.0.0.5");
+
+        // Limit caps the result, still newest first.
+        let limited = store.list_events(t1, 2).await.unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].id, events[0].id);
+    }
+
+    #[tokio::test]
+    async fn monitor_set_get_roundtrip_preserves_last_run() {
+        let store = Store::memory();
+        let tenant = Uuid::new_v4();
+        assert!(store.get_monitor(tenant).await.unwrap().is_none());
+
+        store
+            .set_monitor(tenant, "10.0.0.0/24", 15, true, false)
+            .await
+            .unwrap();
+        let saved = store.get_monitor(tenant).await.unwrap().unwrap();
+        assert_eq!(saved.target, "10.0.0.0/24");
+        assert_eq!(saved.interval_minutes, 15);
+        assert!(saved.enabled);
+        assert!(!saved.deep);
+        assert!(saved.last_run_at.is_none());
+
+        // Claim stamps last_run_at; a reconfigure must not erase it.
+        let claimed = store.claim_due_monitors().await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        store
+            .set_monitor(tenant, "10.0.0.0/25", 30, true, true)
+            .await
+            .unwrap();
+        let updated = store.get_monitor(tenant).await.unwrap().unwrap();
+        assert_eq!(updated.target, "10.0.0.0/25");
+        assert!(updated.last_run_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn claim_takes_due_monitors_exactly_once() {
+        let store = Store::memory();
+        let due_tenant = Uuid::new_v4();
+        let disabled_tenant = Uuid::new_v4();
+        store
+            .set_monitor(due_tenant, "192.168.1.0/24", 15, true, false)
+            .await
+            .unwrap();
+        store
+            .set_monitor(disabled_tenant, "192.168.2.0/24", 15, false, false)
+            .await
+            .unwrap();
+
+        // Never-run + enabled is due; disabled is not.
+        let claimed = store.claim_due_monitors().await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].tenant_id, due_tenant);
+        assert_eq!(claimed[0].target, "192.168.1.0/24");
+        assert!(!claimed[0].deep);
+
+        // The claim stamped last_run_at, so an immediate second claim is empty.
+        let last_run = store
+            .get_monitor(due_tenant)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_run_at;
+        assert!(last_run.is_some());
+        assert!(store.claim_due_monitors().await.unwrap().is_empty());
     }
 }

@@ -14,6 +14,15 @@ export function LoadingState() {
   );
 }
 
+export function EmptyState({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="px-5 py-10 text-center">
+      <p className="text-sm font-medium text-fg">{title}</p>
+      <p className="mt-1 text-xs text-muted">{hint}</p>
+    </div>
+  );
+}
+
 export function ErrorState({ message }: { message: string }) {
   return (
     <div className="rounded-xl border border-crit/30 bg-crit/5 p-6">

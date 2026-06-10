@@ -38,3 +38,16 @@ export const exposureLabel: Record<Exposure, string> = {
   internet_facing: "Internet-facing",
   unknown: "Unknown",
 };
+
+/** Compact relative timestamp for feeds: "just now", "4m ago", "2h ago", "3d ago". */
+export function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}

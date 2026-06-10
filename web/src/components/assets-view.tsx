@@ -94,7 +94,9 @@ export function AssetsView() {
     try {
       const r = await runScan(target.trim() || "127.0.0.1");
       await reload();
-      setScanNote(`${r.live} live · ${r.hosts_scanned} scanned · ${r.duration_ms} ms`);
+      setScanNote(
+        `${r.live} live · ${r.hosts_scanned} scanned · ${r.changes} change${r.changes === 1 ? "" : "s"} · ${r.duration_ms} ms`,
+      );
     } catch (e) {
       setScanNote(e instanceof Error ? e.message : "scan failed");
     } finally {

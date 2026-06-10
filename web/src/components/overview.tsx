@@ -2,6 +2,7 @@
 
 import { bandOrder, bandStyles } from "@/lib/ui";
 import { useInventory } from "@/lib/use-inventory";
+import { ActivityFeed } from "@/components/activity-feed";
 import { DataSources } from "@/components/data-sources";
 import { ErrorState, LoadingState } from "@/components/states";
 
@@ -93,6 +94,8 @@ export function Overview() {
           ))}
         </div>
       </section>
+
+      <ActivityFeed />
 
       <DataSources assets={assets} summary={summary} />
     </div>

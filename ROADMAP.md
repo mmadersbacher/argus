@@ -6,9 +6,11 @@ Tracking the phased build from the design spec. Checkboxes are the live task lis
 CVE-correlating CAASM / exposure-management platform with a polished console —
 plus the SaaS foundation from P3: authentication (Argon2 + JWT + API keys),
 enforced multi-tenancy (tenant-scoped schema + queries), RBAC, audit log,
-login/signup console flow and hardened CORS. The remaining P2 / P3 work
-(passive sensing, trained classifier, connectors, policy/reporting, billing)
-is multi-week.
+login/signup console flow and hardened CORS. The first P2 capability —
+**continuous monitoring + change detection** — is now in too: scheduled
+per-tenant re-scans that diff against the stored inventory and surface a
+change-event feed in the console. The remaining P2 / P3 work (passive sensing,
+trained classifier, connectors, policy/reporting, billing) is multi-week.
 
 ## P0 — Foundations ✅
 - [x] Repo + design spec
@@ -32,7 +34,13 @@ is multi-week.
 - [ ] `argus-sensor`: passive sensing (p0f/Zeek-style signatures)
 - [ ] `argus-intel`: trained device classifier (Fingerbank features)
 - [ ] `argus-connectors`: cloud/AD/NetBox adapters (Axonius adapter pattern)
-- [ ] continuous monitoring + change detection
+- [x] continuous monitoring + change detection: per-tenant scheduled re-scans
+      (background scheduler, bounded concurrency, atomic due-monitor claim),
+      asset-level diff (`asset.new` / `services.changed` / `vulns.changed` /
+      `risk.changed`), a persisted change-event feed (`GET /api/events`),
+      monitor config (`GET`/`POST /api/monitor`), and the console activity feed
+      + monitor settings. Enrichment is non-regressive, so a feed outage can't
+      spam false change events.
 - [ ] `argus-behavior`: per-deployment anomaly baselines
 
 ## P3 — Enterprise / SaaS
