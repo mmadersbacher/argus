@@ -38,6 +38,9 @@ export function useInventory(): Inventory {
 
   useEffect(() => {
     mounted.current = true;
+    // False positive: reload() is async data fetching — every setState in it
+    // happens after an await, never synchronously in the effect body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void reload();
     const id = setInterval(() => void reload(), 15000);
     return () => {

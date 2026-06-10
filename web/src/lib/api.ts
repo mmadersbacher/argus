@@ -1,6 +1,8 @@
 // Typed client for the argus-api backend. Mirrors the JSON shapes emitted by
 // crates/argus-api (serde) so the console stays in lockstep with the domain.
 
+import { clearSession, loadSession, type Role, type Session } from "./session";
+
 export type RiskBand = "info" | "low" | "medium" | "high" | "critical";
 export type AssetType =
   | "it"
@@ -91,13 +93,113 @@ export interface ScanResult {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8088";
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init });
-  if (!res.ok) {
-    throw new Error(`${path} responded ${res.status}`);
+/** Fetch wrapper: attaches the Bearer token, surfaces the API's error text,
+ *  and bounces to /login when the session is rejected. Auth endpoints opt
+ *  out of the bounce so a failed login shows its error inline. */
+async function fetchJSON<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: { redirectOn401?: boolean },
+): Promise<T> {
+  const session = loadSession();
+  const headers = new Headers(init?.headers);
+  if (session && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${session.token}`);
   }
+  const res = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
+    ...init,
+    headers,
+  });
+  if (res.status === 401 && (opts?.redirectOn401 ?? true)) {
+    clearSession();
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("session expired");
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(body || `${path} responded ${res.status}`);
+  }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
+
+// ---- auth -----------------------------------------------------------------
+
+export interface SessionResponse {
+  token: string;
+  email: string;
+  role: Role;
+  tenant_id: string;
+}
+
+export const login = (email: string, password: string) =>
+  fetchJSON<SessionResponse>(
+    "/api/auth/login",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    },
+    { redirectOn401: false },
+  );
+
+export const register = (
+  organization: string,
+  email: string,
+  password: string,
+) =>
+  fetchJSON<SessionResponse>(
+    "/api/auth/register",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ organization, email, password }),
+    },
+    { redirectOn401: false },
+  );
+
+export interface UserSummary {
+  id: string;
+  email: string;
+  role: Role;
+}
+
+export const listUsers = () => fetchJSON<UserSummary[]>("/api/users");
+
+export const createUser = (email: string, password: string, role: Role) =>
+  fetchJSON<UserSummary>("/api/users", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password, role }),
+  });
+
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  role: Role;
+}
+
+export interface CreatedApiKey extends ApiKeySummary {
+  /** Plaintext secret — shown exactly once. */
+  key: string;
+}
+
+export const listApiKeys = () => fetchJSON<ApiKeySummary[]>("/api/api-keys");
+
+export const createApiKey = (name: string, role: Role) =>
+  fetchJSON<CreatedApiKey>("/api/api-keys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, role }),
+  });
+
+export const deleteApiKey = (id: string) =>
+  fetchJSON<void>(`/api/api-keys/${id}`, { method: "DELETE" });
+
+export type { Role, Session };
+
+// ---- inventory ------------------------------------------------------------
 
 export const getSummary = () => fetchJSON<Summary>("/api/summary");
 export const getAssets = () => fetchJSON<ScoredAsset[]>("/api/assets");
