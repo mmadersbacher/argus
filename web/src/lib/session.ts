@@ -55,6 +55,18 @@ export function subscribeSession(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+// Cross-tab sync: when another tab logs in/out (or localStorage is cleared),
+// re-read and notify so this tab's guard re-evaluates instead of serving a
+// stale cached session.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === KEY || e.key === null) {
+      cached = read();
+      emit();
+    }
+  });
+}
+
 /** Server snapshot: there is never a session during SSR. */
 export function serverSession(): Session | null {
   return null;

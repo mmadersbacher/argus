@@ -103,6 +103,9 @@ export default function Page() {
   const addKey = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
+    // Drop any previously shown secret before creating the next one, so a
+    // failed create never leaves a stale key banner on screen.
+    setCreatedKey(null);
     try {
       const created = await createApiKey(newKeyName, newKeyRole);
       setCreatedKey(created.key);
@@ -118,6 +121,8 @@ export default function Page() {
   const revokeKey = async (id: string) => {
     try {
       await deleteApiKey(id);
+      // Clear the one-time banner so a revoked key's plaintext isn't left on screen.
+      setCreatedKey(null);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to revoke key");
