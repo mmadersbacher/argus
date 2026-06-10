@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{db, AppState};
+use crate::AppState;
 
 /// Header carrying a machine credential as an alternative to a Bearer JWT.
 pub const API_KEY_HEADER: &str = "x-api-key";
@@ -163,9 +163,14 @@ pub fn hash_api_key(plaintext: &str) -> String {
 
 /// Sliding-window in-memory rate limiter for login attempts.
 ///
-/// Keyed by caller-chosen string (email), bounded per [`Self::WINDOW`].
-/// In-memory only: resets on restart and is per-instance, which is an
-/// acceptable brute-force bound for a single API node.
+/// Keyed by an arbitrary string with a per-key cap over [`Self::WINDOW`]. The
+/// login path uses two dimensions (see [`Self::PER_PAIR_MAX`] /
+/// [`Self::PER_IP_MAX`]): a tight per-`(ip,email)` budget that stops targeted
+/// brute force without letting an attacker lock a victim out (the victim logs
+/// in from a different IP), plus a looser per-IP budget that caps password
+/// spraying across many accounts from one source. In-memory only: resets on
+/// restart and is per-instance, an acceptable bound for a single API node;
+/// distributed spraying from many IPs is out of scope for this limiter.
 #[derive(Default)]
 pub struct LoginLimiter {
     attempts: Mutex<HashMap<String, Vec<Instant>>>,
@@ -174,11 +179,13 @@ pub struct LoginLimiter {
 impl LoginLimiter {
     /// Observation window for counting attempts.
     pub const WINDOW: Duration = Duration::from_secs(60);
-    /// Maximum attempts per key within [`Self::WINDOW`].
-    pub const MAX_ATTEMPTS: usize = 5;
+    /// Max attempts per `(ip, email)` pair within [`Self::WINDOW`].
+    pub const PER_PAIR_MAX: usize = 5;
+    /// Max attempts per source IP within [`Self::WINDOW`].
+    pub const PER_IP_MAX: usize = 50;
 
-    /// Record an attempt for `key`; returns `false` when over the limit.
-    pub fn allow(&self, key: &str) -> bool {
+    /// Record an attempt for `key`; returns `false` when at/over `max`.
+    pub fn allow(&self, key: &str, max: usize) -> bool {
         let now = Instant::now();
         let mut map = self
             .attempts
@@ -190,7 +197,7 @@ impl LoginLimiter {
             !hits.is_empty()
         });
         let hits = map.entry(key.to_owned()).or_default();
-        let allowed = hits.len() < Self::MAX_ATTEMPTS;
+        let allowed = hits.len() < max;
         if allowed {
             hits.push(now);
         }
@@ -247,7 +254,9 @@ where
         // Machine credential first: explicit header, no ambiguity with Bearer.
         if let Some(key) = parts.headers.get(API_KEY_HEADER) {
             let key = key.to_str().map_err(|_| unauthorized("invalid api key"))?;
-            let found = db::find_api_key(&state.pool, &hash_api_key(key))
+            let found = state
+                .store
+                .find_api_key(&hash_api_key(key))
                 .await
                 .map_err(|_| unauthorized("invalid api key"))?
                 .ok_or_else(|| unauthorized("invalid api key"))?;
@@ -318,12 +327,14 @@ mod tests {
     #[test]
     fn login_limiter_blocks_after_max_attempts() {
         let limiter = LoginLimiter::default();
-        for _ in 0..LoginLimiter::MAX_ATTEMPTS {
-            assert!(limiter.allow("a@b.c"));
+        let max = LoginLimiter::PER_PAIR_MAX;
+        for _ in 0..max {
+            assert!(limiter.allow("1.2.3.4|a@b.c", max));
         }
-        assert!(!limiter.allow("a@b.c"));
-        // Independent keys are unaffected.
-        assert!(limiter.allow("other@b.c"));
+        assert!(!limiter.allow("1.2.3.4|a@b.c", max));
+        // A different (ip, email) key is unaffected — the victim logging in
+        // from another IP is not locked out by an attacker's attempts.
+        assert!(limiter.allow("9.9.9.9|a@b.c", max));
     }
 
     #[test]

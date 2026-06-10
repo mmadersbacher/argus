@@ -12,9 +12,6 @@ use uuid::Uuid;
 
 use crate::seed::ScoredAsset;
 
-/// Default connection string (overridable via the `DATABASE_URL` env var).
-pub const DEFAULT_DATABASE_URL: &str = "postgresql://argus:argus@127.0.0.1:5432/argus";
-
 /// Connect, build the pool, and run pending migrations.
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
@@ -53,6 +50,15 @@ pub async fn tenant_count(pool: &PgPool) -> Result<i64, sqlx::Error> {
 pub async fn tenant_slug_exists(pool: &PgPool, slug: &str) -> Result<bool, sqlx::Error> {
     let (exists,): (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM tenants WHERE slug = $1)")
         .bind(slug)
+        .fetch_one(pool)
+        .await?;
+    Ok(exists)
+}
+
+/// Whether a login email is already registered (pre-check for signup).
+pub async fn user_email_exists(pool: &PgPool, email: &str) -> Result<bool, sqlx::Error> {
+    let (exists,): (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+        .bind(email)
         .fetch_one(pool)
         .await?;
     Ok(exists)

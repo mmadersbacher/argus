@@ -7,6 +7,7 @@
 //! tenant inventory.
 #![allow(clippy::unused_async, clippy::needless_pass_by_value)] // axum handler ergonomics
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,6 @@ use axum::{Json, Router};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -28,15 +28,17 @@ mod account;
 mod auth;
 mod db;
 mod seed;
+mod store;
 
 use auth::{AuthContext, AuthKeys, LoginLimiter};
 use seed::{scored_from_discovered, seed_assets, ScoredAsset, Summary};
+use store::{Store, StoreError};
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
-    /// Postgres connection pool.
-    pub pool: PgPool,
+    /// Backing store (Postgres or in-memory).
+    pub store: Store,
     /// JWT signing/verification keys.
     pub keys: AuthKeys,
     /// Login brute-force limiter.
@@ -53,16 +55,12 @@ async fn main() {
         )
         .init();
 
-    let database_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| db::DEFAULT_DATABASE_URL.to_owned());
-    let pool = db::connect(&database_url)
-        .await
-        .expect("connect to Postgres (set DATABASE_URL or run the local argus DB)");
-
-    bootstrap(&pool).await;
+    let store = select_store().await;
+    tracing::info!(backend = store.label(), "storage ready");
+    bootstrap(&store).await;
 
     let state = AppState {
-        pool,
+        store,
         keys: AuthKeys::from_secret(&auth::load_or_generate_secret()),
         limiter: Arc::new(LoginLimiter::default()),
         signup_enabled: env_flag("ARGUS_SIGNUP_ENABLED", true),
@@ -74,29 +72,59 @@ async fn main() {
         .await
         .expect("bind argus-api listener");
     tracing::info!("argus-api listening on http://{bind}");
-    axum::serve(listener, app)
-        .await
-        .expect("argus-api server error");
+    // `into_make_service_with_connect_info` exposes the client socket address
+    // to handlers (ConnectInfo<SocketAddr>) — used by the login rate limiter.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("argus-api server error");
 }
 
-/// Read a boolean env flag with a default ("false"/"0"/"no" disable it).
+/// Read a boolean env flag. An unset OR empty/whitespace value falls back to
+/// `default` (fail-safe: e.g. `ARGUS_SIGNUP_ENABLED=` does not silently enable
+/// signup); otherwise "false"/"0"/"no" disable, anything else enables.
 fn env_flag(name: &str, default: bool) -> bool {
-    std::env::var(name).map_or(default, |v| {
-        !matches!(v.trim().to_lowercase().as_str(), "false" | "0" | "no")
-    })
+    match std::env::var(name) {
+        Ok(v) if !v.trim().is_empty() => {
+            !matches!(v.trim().to_lowercase().as_str(), "false" | "0" | "no")
+        }
+        _ => default,
+    }
+}
+
+/// Choose the storage backend.
+///
+/// `ARGUS_STORE=memory` forces the in-memory store. Otherwise `DATABASE_URL`
+/// selects Postgres (the deployment default); when it is unset we fall back to
+/// the in-memory store so the API runs with zero dependencies for local dev.
+async fn select_store() -> Store {
+    let force_memory =
+        std::env::var("ARGUS_STORE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("memory"));
+    if force_memory {
+        return Store::memory();
+    }
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        let pool = db::connect(&url).await.expect(
+            "connect to Postgres (set DATABASE_URL, or unset it to use the in-memory store)",
+        );
+        Store::Postgres(pool)
+    } else {
+        tracing::warn!(
+            "DATABASE_URL not set — using the in-memory store (data is lost on restart; \
+             local dev only). Set DATABASE_URL for persistence."
+        );
+        Store::memory()
+    }
 }
 
 /// First-run bootstrap: create the default tenant + admin user (and demo
 /// assets unless `ARGUS_SEED_DEMO=false`) when no tenant exists yet.
-async fn bootstrap(pool: &PgPool) {
-    if db::tenant_count(pool).await.expect("count tenants") > 0 {
+async fn bootstrap(store: &Store) {
+    if store.tenant_count().await.expect("count tenants") > 0 {
         return;
     }
-    let tenant_id = Uuid::new_v4();
-    db::create_tenant(pool, tenant_id, "Default", "default")
-        .await
-        .expect("create bootstrap tenant");
-
     let email = std::env::var("ARGUS_ADMIN_EMAIL").map_or_else(
         |_| "admin@argus.local".to_owned(),
         |e| e.trim().to_lowercase(),
@@ -112,6 +140,7 @@ async fn bootstrap(pool: &PgPool) {
         },
         |pw| (pw, false),
     );
+    let tenant_id = Uuid::new_v4();
     let user = db::UserRow {
         id: Uuid::new_v4(),
         tenant_id,
@@ -119,9 +148,10 @@ async fn bootstrap(pool: &PgPool) {
         password_hash: auth::hash_password(&password).expect("hash bootstrap password"),
         role: Role::Admin,
     };
-    db::create_user(pool, &user)
+    store
+        .register_tenant(tenant_id, "Default", "default", &user)
         .await
-        .expect("create bootstrap admin");
+        .expect("create bootstrap tenant + admin");
     if generated {
         // Printed exactly once, on first boot. There is no other way to
         // recover this credential — log loudly.
@@ -134,9 +164,7 @@ async fn bootstrap(pool: &PgPool) {
     if env_flag("ARGUS_SEED_DEMO", true) {
         tracing::info!("seeding demo assets into the default tenant");
         for asset in seed_assets() {
-            db::upsert(pool, tenant_id, &asset)
-                .await
-                .expect("seed upsert");
+            store.upsert(tenant_id, &asset).await.expect("seed upsert");
         }
     }
 }
@@ -146,10 +174,20 @@ async fn bootstrap(pool: &PgPool) {
 fn cors_layer() -> CorsLayer {
     let origins = std::env::var("ARGUS_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".to_owned());
-    let list: Vec<HeaderValue> = origins
-        .split(',')
-        .filter_map(|origin| origin.trim().parse().ok())
-        .collect();
+    let mut list: Vec<HeaderValue> = Vec::new();
+    for origin in origins.split(',').map(str::trim).filter(|o| !o.is_empty()) {
+        if let Ok(value) = origin.parse() {
+            list.push(value);
+        } else {
+            tracing::warn!(origin, "ignoring invalid ARGUS_CORS_ORIGIN entry");
+        }
+    }
+    if list.is_empty() {
+        tracing::warn!(
+            "ARGUS_CORS_ORIGIN produced an empty allow-list — the browser console \
+             will be blocked by CORS. Check the value."
+        );
+    }
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(list))
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
@@ -186,13 +224,19 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Map a database error to an opaque 500 (details only in the server log).
-pub(crate) fn db_error(err: sqlx::Error) -> (StatusCode, String) {
-    tracing::error!(error = %err, "database error");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal database error".to_owned(),
-    )
+/// Map a store error to an HTTP response: conflicts surface as 409, everything
+/// else as an opaque 500 (details only in the server log).
+pub(crate) fn store_error(err: StoreError) -> (StatusCode, String) {
+    match err {
+        StoreError::Conflict(msg) => (StatusCode::CONFLICT, msg.to_owned()),
+        StoreError::Backend(detail) => {
+            tracing::error!(error = %detail, "store error");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal database error".to_owned(),
+            )
+        }
+    }
 }
 
 /// Unauthenticated liveness probe. Deliberately leaks no inventory data.
@@ -208,10 +252,12 @@ async fn list_assets(
     auth: AuthContext,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ScoredAsset>>, (StatusCode, String)> {
-    db::load_all(&state.pool, auth.tenant_id)
+    state
+        .store
+        .load_all(auth.tenant_id)
         .await
         .map(Json)
-        .map_err(db_error)
+        .map_err(store_error)
 }
 
 async fn get_asset(
@@ -219,9 +265,11 @@ async fn get_asset(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ScoredAsset>, (StatusCode, String)> {
-    let assets = db::load_all(&state.pool, auth.tenant_id)
+    let assets = state
+        .store
+        .load_all(auth.tenant_id)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     assets
         .into_iter()
         .find(|a| a.asset.id.to_string() == id)
@@ -233,9 +281,11 @@ async fn summary(
     auth: AuthContext,
     State(state): State<AppState>,
 ) -> Result<Json<Summary>, (StatusCode, String)> {
-    let assets = db::load_all(&state.pool, auth.tenant_id)
+    let assets = state
+        .store
+        .load_all(auth.tenant_id)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     Ok(Json(Summary::from_assets(&assets)))
 }
 
@@ -335,15 +385,16 @@ async fn run_scan(
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let live = ingest(&state.pool, auth.tenant_id, hosts).await?;
-    db::audit(
-        &state.pool,
-        auth.tenant_id,
-        auth.user_id,
-        "scan.run",
-        serde_json::json!({ "target": target, "engine": engine, "live": live }),
-    )
-    .await;
+    let live = ingest(&state.store, auth.tenant_id, hosts).await?;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "scan.run",
+            serde_json::json!({ "target": target, "engine": engine, "live": live }),
+        )
+        .await;
 
     tracing::info!(target = %target, engine, hosts = ips.len(), live, "scan complete");
     Ok(Json(ScanResponse {
@@ -359,7 +410,7 @@ async fn run_scan(
 /// (argus-intel), enrich with live CVE intelligence (NVD/KEV/EPSS),
 /// recompute risk, and upsert. Shared by live scans and the nmap-XML import.
 async fn ingest(
-    pool: &PgPool,
+    store: &Store,
     tenant_id: Uuid,
     hosts: Vec<argus_discovery::DiscoveredHost>,
 ) -> Result<usize, (StatusCode, String)> {
@@ -397,7 +448,7 @@ async fn ingest(
             asset.asset.criticality,
         ));
         asset.vulnerabilities = enriched;
-        db::upsert(pool, tenant_id, asset).await.map_err(db_error)?;
+        store.upsert(tenant_id, asset).await.map_err(store_error)?;
     }
     Ok(n)
 }
@@ -427,15 +478,16 @@ async fn import_nmap(
     }
     let hosts = argus_discovery::nmap::parse(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("nmap XML: {e}")))?;
-    let imported = ingest(&state.pool, auth.tenant_id, hosts).await?;
-    db::audit(
-        &state.pool,
-        auth.tenant_id,
-        auth.user_id,
-        "import.nmap",
-        serde_json::json!({ "imported": imported }),
-    )
-    .await;
+    let imported = ingest(&state.store, auth.tenant_id, hosts).await?;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "import.nmap",
+            serde_json::json!({ "imported": imported }),
+        )
+        .await;
     tracing::info!(imported, "nmap import complete");
     Ok(Json(ImportResponse {
         source: "nmap-xml",

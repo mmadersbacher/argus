@@ -48,8 +48,9 @@ CREATE INDEX assets_tenant_risk_idx ON assets (tenant_id, risk DESC);
 
 CREATE TABLE audit_log (
     id         BIGSERIAL PRIMARY KEY,
-    tenant_id  UUID NOT NULL,
-    user_id    UUID,
+    tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    -- Keep the audit row if the acting user is removed; just null the actor.
+    user_id    UUID REFERENCES users(id) ON DELETE SET NULL,
     action     TEXT NOT NULL,
     detail     JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

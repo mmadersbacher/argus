@@ -1,32 +1,22 @@
 //! Account & access management endpoints: tenant signup, login, session
 //! introspection, and admin-only user / API-key management.
 
+use std::net::SocketAddr;
+
 use argus_core::tenant::Role;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{self, AuthContext};
-use crate::{db, db_error, AppState};
+use crate::auth::{self, AuthContext, LoginLimiter};
+use crate::{db, store_error, AppState};
 
 const MIN_PASSWORD_LEN: usize = 10;
 
 fn bad_request(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.to_owned())
-}
-
-/// Map a sqlx error, turning unique violations into a 409 instead of a 500.
-fn conflict_or_db_error(err: sqlx::Error, conflict_msg: &str) -> (StatusCode, String) {
-    if err
-        .as_database_error()
-        .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
-    {
-        (StatusCode::CONFLICT, conflict_msg.to_owned())
-    } else {
-        db_error(err)
-    }
 }
 
 fn validate_credentials(email: &str, password: &str) -> Result<(), (StatusCode, String)> {
@@ -52,6 +42,16 @@ fn slugify(name: &str) -> String {
     } else {
         slug
     }
+}
+
+fn hash_or_500(password: &str) -> Result<String, (StatusCode, String)> {
+    auth::hash_password(password).map_err(|err| {
+        tracing::error!(error = %err, "password hashing failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "hashing error".to_owned(),
+        )
+    })
 }
 
 /// Session payload returned by login and register.
@@ -114,13 +114,16 @@ pub async fn register(
     }
     let email = req.email.trim().to_lowercase();
     validate_credentials(&email, &req.password)?;
-    let password_hash = auth::hash_password(&req.password).map_err(|err| {
-        tracing::error!(error = %err, "password hashing failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "hashing error".to_owned(),
-        )
-    })?;
+
+    if state
+        .store
+        .user_email_exists(&email)
+        .await
+        .map_err(store_error)?
+    {
+        return Err((StatusCode::CONFLICT, "email already registered".to_owned()));
+    }
+    let password_hash = hash_or_500(&req.password)?;
 
     let tenant_id = Uuid::new_v4();
     let user = db::UserRow {
@@ -131,33 +134,33 @@ pub async fn register(
         role: Role::Admin,
     };
 
-    // Disambiguate taken slugs with a short suffix (race on the unique index
-    // is still caught below and surfaces as a 409).
+    // Disambiguate a taken slug with a short suffix; the store's uniqueness
+    // guard still catches the rare race and surfaces it as a 409.
     let mut slug = slugify(organization);
-    if db::tenant_slug_exists(&state.pool, &slug)
+    if state
+        .store
+        .tenant_slug_exists(&slug)
         .await
-        .map_err(db_error)?
+        .map_err(store_error)?
     {
         slug = format!("{slug}-{}", &tenant_id.simple().to_string()[..6]);
     }
 
-    let mut tx = state.pool.begin().await.map_err(db_error)?;
-    db::create_tenant(&mut *tx, tenant_id, organization, &slug)
+    state
+        .store
+        .register_tenant(tenant_id, organization, &slug, &user)
         .await
-        .map_err(|e| conflict_or_db_error(e, "organization already exists"))?;
-    db::create_user(&mut *tx, &user)
-        .await
-        .map_err(|e| conflict_or_db_error(e, "email already registered"))?;
-    tx.commit().await.map_err(db_error)?;
+        .map_err(store_error)?;
 
-    db::audit(
-        &state.pool,
-        tenant_id,
-        Some(user.id),
-        "tenant.register",
-        serde_json::json!({ "organization": organization, "email": email }),
-    )
-    .await;
+    state
+        .store
+        .audit(
+            tenant_id,
+            Some(user.id),
+            "tenant.register",
+            serde_json::json!({ "organization": organization, "email": email }),
+        )
+        .await;
     tracing::info!(%tenant_id, email, "tenant registered");
     session_response(&state, user.id, tenant_id, Role::Admin, &email)
 }
@@ -174,18 +177,31 @@ pub struct LoginRequest {
 /// Authenticate a user and return a session token.
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<SessionResponse>, (StatusCode, String)> {
     let email = req.email.trim().to_lowercase();
-    if !state.limiter.allow(&email) {
+    // Two rate-limit dimensions: a loose per-IP budget (caps spraying across
+    // many accounts) and a tight per-(ip,email) budget (stops targeted brute
+    // force without letting an attacker lock the victim out from another IP).
+    let ip = addr.ip();
+    let too_many = !state
+        .limiter
+        .allow(&format!("ip:{ip}"), LoginLimiter::PER_IP_MAX)
+        || !state
+            .limiter
+            .allow(&format!("pair:{ip}|{email}"), LoginLimiter::PER_PAIR_MAX);
+    if too_many {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "too many login attempts — retry in a minute".to_owned(),
         ));
     }
-    let user = db::find_user_by_email(&state.pool, &email)
+    let user = state
+        .store
+        .find_user_by_email(&email)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     let Some(user) = user else {
         // Burn comparable time for unknown emails to blunt user enumeration.
         let _ = auth::verify_password(&req.password, auth::dummy_hash());
@@ -194,14 +210,15 @@ pub async fn login(
     if !auth::verify_password(&req.password, &user.password_hash) {
         return Err((StatusCode::UNAUTHORIZED, "invalid credentials".to_owned()));
     }
-    db::audit(
-        &state.pool,
-        user.tenant_id,
-        Some(user.id),
-        "auth.login",
-        serde_json::json!({ "email": email }),
-    )
-    .await;
+    state
+        .store
+        .audit(
+            user.tenant_id,
+            Some(user.id),
+            "auth.login",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
     session_response(&state, user.id, user.tenant_id, user.role, &email)
 }
 
@@ -249,9 +266,11 @@ pub async fn list_users(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UserSummary>>, (StatusCode, String)> {
     auth.require(Role::Admin)?;
-    let users = db::list_users(&state.pool, auth.tenant_id)
+    let users = state
+        .store
+        .list_users(auth.tenant_id)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     Ok(Json(
         users
             .into_iter()
@@ -280,7 +299,7 @@ pub async fn create_user(
     auth.require(Role::Admin)?;
     let email = req.email.trim().to_lowercase();
     validate_credentials(&email, &req.password)?;
-    let password_hash = auth_hash(&req.password)?;
+    let password_hash = hash_or_500(&req.password)?;
     let user = db::UserRow {
         id: Uuid::new_v4(),
         tenant_id: auth.tenant_id,
@@ -288,32 +307,21 @@ pub async fn create_user(
         password_hash,
         role: req.role,
     };
-    db::create_user(&state.pool, &user)
-        .await
-        .map_err(|e| conflict_or_db_error(e, "email already registered"))?;
-    db::audit(
-        &state.pool,
-        auth.tenant_id,
-        auth.user_id,
-        "user.create",
-        serde_json::json!({ "email": email, "role": req.role.as_str() }),
-    )
-    .await;
+    state.store.create_user(&user).await.map_err(store_error)?;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "user.create",
+            serde_json::json!({ "email": email, "role": req.role.as_str() }),
+        )
+        .await;
     Ok(Json(UserSummary {
         id: user.id,
         email,
         role: req.role,
     }))
-}
-
-fn auth_hash(password: &str) -> Result<String, (StatusCode, String)> {
-    auth::hash_password(password).map_err(|err| {
-        tracing::error!(error = %err, "password hashing failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "hashing error".to_owned(),
-        )
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -337,9 +345,11 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ApiKeySummary>>, (StatusCode, String)> {
     auth.require(Role::Admin)?;
-    let keys = db::list_api_keys(&state.pool, auth.tenant_id)
+    let keys = state
+        .store
+        .list_api_keys(auth.tenant_id)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     Ok(Json(
         keys.into_iter()
             .map(|(id, name, role)| ApiKeySummary { id, name, role })
@@ -382,17 +392,20 @@ pub async fn create_api_key(
     }
     let (plaintext, hash) = auth::generate_api_key();
     let id = Uuid::new_v4();
-    db::create_api_key(&state.pool, id, auth.tenant_id, name, &hash, req.role)
+    state
+        .store
+        .create_api_key(id, auth.tenant_id, name, &hash, req.role)
         .await
-        .map_err(db_error)?;
-    db::audit(
-        &state.pool,
-        auth.tenant_id,
-        auth.user_id,
-        "apikey.create",
-        serde_json::json!({ "name": name, "role": req.role.as_str() }),
-    )
-    .await;
+        .map_err(store_error)?;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "apikey.create",
+            serde_json::json!({ "name": name, "role": req.role.as_str() }),
+        )
+        .await;
     Ok(Json(CreatedApiKey {
         id,
         name: name.to_owned(),
@@ -408,20 +421,23 @@ pub async fn delete_api_key(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     auth.require(Role::Admin)?;
-    let removed = db::delete_api_key(&state.pool, auth.tenant_id, id)
+    let removed = state
+        .store
+        .delete_api_key(auth.tenant_id, id)
         .await
-        .map_err(db_error)?;
+        .map_err(store_error)?;
     if !removed {
         return Err((StatusCode::NOT_FOUND, "api key not found".to_owned()));
     }
-    db::audit(
-        &state.pool,
-        auth.tenant_id,
-        auth.user_id,
-        "apikey.delete",
-        serde_json::json!({ "id": id }),
-    )
-    .await;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "apikey.delete",
+            serde_json::json!({ "id": id }),
+        )
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
