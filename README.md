@@ -6,8 +6,9 @@ platform that continuously discovers, identifies, scores and monitors every asse
 Argus mirrors the *architecture* of enterprise platforms like Armis Centrix™ and runZero,
 built entirely on open-source data and tooling. It is **not** affiliated with Armis.
 
-> Status: **early development** (P0 — foundations). See [`ROADMAP.md`](ROADMAP.md) and the
-> design spec under [`docs/superpowers/specs/`](docs/superpowers/specs/).
+> Status: **P1 spine + SaaS foundation** — discovery, CVE correlation, risk scoring and the
+> console work end-to-end behind JWT/API-key auth with tenant isolation and RBAC. See
+> [`ROADMAP.md`](ROADMAP.md) and the design spec under [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## What it does (target)
 
@@ -32,6 +33,15 @@ crates/
   ...                # sensor, intel, behavior, policy, connectors [P2/P3]
 web/                 # Next.js console                            [P0/P1]
 ```
+
+## Security model
+
+Multi-tenant by construction: every API route is authenticated (Argon2id
+passwords → HS256 JWT sessions, or hashed `x-api-key` machine credentials),
+every query is scoped to the caller's tenant, and roles
+(`viewer`/`analyst`/`admin`) gate scans, imports and administration. Logins,
+scans, imports and credential changes land in a per-tenant audit log.
+Deployment hardening (TLS, secrets, CORS): see [`DEPLOY.md`](DEPLOY.md).
 
 ## Development
 

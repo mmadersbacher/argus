@@ -23,6 +23,18 @@ services:
       DATABASE_URL: postgresql://argus:argus@postgres:5432/argus
       ARGUS_BIND: 0.0.0.0:8088
       RUST_LOG: info
+      # REQUIRED for real deployments: 32+ char secret; without it sessions
+      # are invalidated on every restart (ephemeral dev secret).
+      ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:-}
+      # Browser origin(s) allowed to call the API (comma-separated).
+      ARGUS_CORS_ORIGIN: ${ARGUS_CORS_ORIGIN:-http://localhost:3000}
+      # First-run bootstrap admin. Without a password, one is generated and
+      # printed once in this container's log.
+      ARGUS_ADMIN_EMAIL: ${ARGUS_ADMIN_EMAIL:-admin@argus.local}
+      ARGUS_ADMIN_PASSWORD: ${ARGUS_ADMIN_PASSWORD:-}
+      # Self-service tenant signup (`true`/`false`) and demo seeding.
+      ARGUS_SIGNUP_ENABLED: ${ARGUS_SIGNUP_ENABLED:-true}
+      ARGUS_SEED_DEMO: ${ARGUS_SEED_DEMO:-true}
     ports:
       - "8088:8088"
     depends_on:
