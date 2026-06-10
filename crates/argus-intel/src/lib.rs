@@ -94,25 +94,103 @@ pub fn classify(features: &Features) -> Classification {
 }
 
 /// Map an OUI vendor string to a device-class hint.
+///
+/// Vendor is the strongest single identity signal, so the order resolves the
+/// most specific classes (medical, industrial, cameras) before generic IT.
 fn vendor_hint(vendor: &str) -> Option<(AssetType, &'static str)> {
     let v = vendor.to_lowercase();
     let has = |needle: &str| v.contains(needle);
-    if has("hikvision") || has("dahua") || has("axis communications") {
-        Some((AssetType::Iot, "ip-camera"))
-    } else if has("siemens") || has("rockwell") || has("schneider") || has("allen-bradley") {
-        Some((AssetType::Ot, "industrial-controller"))
-    } else if has("ge healthcare") || has("philips") || has("medtronic") || has("draeger") {
+    if has("ge healthcare")
+        || has("philips")
+        || has("medtronic")
+        || has("draeger")
+        || has("dräger")
+        || has("baxter")
+        || has("hillrom")
+        || has("siemens healthineers")
+    {
         Some((AssetType::Iomt, "medical-device"))
-    } else if has("cisco") || has("juniper") || has("arista") || has("ubiquiti") || has("netgear") {
+    } else if has("hikvision")
+        || has("dahua")
+        || has("axis communications")
+        || has("hanwha")
+        || has("vivotek")
+        || has("uniview")
+    {
+        Some((AssetType::Iot, "ip-camera"))
+    } else if has("siemens")
+        || has("rockwell")
+        || has("schneider")
+        || has("allen-bradley")
+        || has("mitsubishi electric")
+        || has("yokogawa")
+        || has("honeywell")
+        || has("abb")
+        || has("emerson")
+        || has("beckhoff")
+        || has("wago")
+    {
+        Some((AssetType::Ot, "industrial-controller"))
+    } else if has("fortinet")
+        || has("palo alto")
+        || has("sonicwall")
+        || has("check point")
+        || has("watchguard")
+    {
+        Some((AssetType::Network, "firewall"))
+    } else if has("cisco")
+        || has("juniper")
+        || has("arista")
+        || has("ubiquiti")
+        || has("netgear")
+        || has("aruba")
+        || has("ruckus")
+        || has("mikrotik")
+        || has("tp-link")
+        || has("zyxel")
+    {
         Some((AssetType::Network, "network-device"))
-    } else if has("vmware") || has("microsoft") {
+    } else if has("synology") || has("qnap") || has("western digital") || has("netapp") {
+        Some((AssetType::It, "nas-storage"))
+    } else if has("hewlett") && has("print")
+        || has("brother")
+        || has("lexmark")
+        || has("canon")
+        || has("xerox")
+        || has("kyocera")
+        || has("ricoh")
+    {
+        Some((AssetType::Iot, "printer"))
+    } else if has("vmware") || has("nutanix") || has("citrix") {
         Some((AssetType::It, "virtual-machine"))
+    } else if has("amazon")
+        || has("google")
+        || has("microsoft azure")
+        || has("digitalocean")
+        || has("hetzner")
+    {
+        Some((AssetType::Cloud, "cloud-instance"))
     } else if has("apple") {
         Some((AssetType::Mobile, "apple-device"))
+    } else if has("samsung")
+        || has("lg electronics")
+        || has("sonos")
+        || has("roku")
+        || has("espressif")
+    {
+        Some((AssetType::Iot, "consumer-iot"))
     } else if has("raspberry") {
         Some((AssetType::Iot, "raspberry-pi"))
-    } else if has("dell") || has("hewlett") || has("supermicro") || has("lenovo") {
+    } else if has("dell")
+        || has("hewlett")
+        || has("supermicro")
+        || has("lenovo")
+        || has("intel")
+        || has("fujitsu")
+    {
         Some((AssetType::It, "server-or-workstation"))
+    } else if has("microsoft") {
+        Some((AssetType::It, "windows-host"))
     } else {
         None
     }
@@ -121,13 +199,27 @@ fn vendor_hint(vendor: &str) -> Option<(AssetType, &'static str)> {
 /// Map an open-port profile to a device-class hint.
 fn port_hint(ports: &[u16]) -> (AssetType, &'static str) {
     let has = |p: u16| ports.contains(&p);
-    if has(502) {
+    if has(502) || has(102) || has(20000) || has(47808) || has(4840) {
         (AssetType::Ot, "industrial-controller")
-    } else if has(3389) || has(445) || has(139) {
+    } else if has(1883) || has(8883) {
+        (AssetType::Iot, "iot-broker-or-device")
+    } else if has(2375) {
+        (AssetType::It, "container-host")
+    } else if has(6379) || has(27017) || has(9200) || has(11211) || has(5984) {
+        (AssetType::It, "data-store")
+    } else if has(1433) || has(1521) || has(3306) || has(5432) {
+        (AssetType::It, "database-server")
+    } else if has(3389) || has(445) || has(139) || has(135) {
         (AssetType::It, "windows-host")
+    } else if has(623) {
+        (AssetType::It, "bmc-ipmi")
+    } else if has(161) && !has(22) {
+        (AssetType::Network, "network-device")
     } else if has(22) {
         (AssetType::It, "linux-host")
-    } else if has(80) || has(443) || has(8080) || has(8443) {
+    } else if has(5060) {
+        (AssetType::Iot, "voip-device")
+    } else if has(80) || has(443) || has(8080) || has(8443) || has(8000) {
         (AssetType::It, "web-server")
     } else if has(23) {
         (AssetType::Network, "legacy-device")

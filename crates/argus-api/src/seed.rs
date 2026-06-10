@@ -110,6 +110,7 @@ struct SeedSpec {
     services: &'static [(u16, &'static str)],
 }
 
+#[allow(clippy::too_many_lines)] // a flat seed-data table; splitting it hurts readability
 fn specs() -> Vec<SeedSpec> {
     vec![
         SeedSpec {
@@ -169,7 +170,7 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "plc",
             mac: [0x00, 0x1c, 0x06, 0xde, 0xad, 0x01],
             ip: [192, 168, 50, 5],
-            services: &[(502, "Siemens SIMATIC S7")],
+            services: &[(502, "Siemens SIMATIC S7"), (102, "s7comm")],
         },
         SeedSpec {
             asset_type: AssetType::Iomt,
@@ -180,7 +181,81 @@ fn specs() -> Vec<SeedSpec> {
             device_type: "infusion-pump",
             mac: [0x00, 0x80, 0x64, 0x12, 0x34, 0x56],
             ip: [192, 168, 60, 22],
-            services: &[(443, "https")],
+            // Embedded medical devices commonly shipped (and rarely patched) an
+            // ancient OpenSSL — Heartbleed-era 1.0.1f on the mgmt interface.
+            services: &[(443, "OpenSSL 1.0.1f (https)")],
+        },
+        // Internet-facing mail edge running a vulnerable Exim.
+        SeedSpec {
+            asset_type: AssetType::It,
+            criticality: Criticality::High,
+            exposure: Exposure::InternetFacing,
+            vendor: "Dell Inc.",
+            os: "Debian 10",
+            device_type: "mail-server",
+            mac: [0x00, 0x16, 0x3e, 0x4f, 0x5a, 0x6b],
+            ip: [203, 0, 113, 25],
+            services: &[(25, "Exim 4.89"), (587, "Exim 4.89")],
+        },
+        // VPN/edge appliance with CitrixBleed.
+        SeedSpec {
+            asset_type: AssetType::Network,
+            criticality: Criticality::Critical,
+            exposure: Exposure::InternetFacing,
+            vendor: "Citrix",
+            os: "NetScaler",
+            device_type: "vpn-gateway",
+            mac: [0x00, 0x1b, 0x0d, 0x11, 0x22, 0x33],
+            ip: [203, 0, 113, 44],
+            services: &[(443, "Citrix NetScaler Gateway")],
+        },
+        // Perimeter firewall, FortiOS auth bypass.
+        SeedSpec {
+            asset_type: AssetType::Network,
+            criticality: Criticality::Critical,
+            exposure: Exposure::InternetFacing,
+            vendor: "Fortinet",
+            os: "FortiOS 7.2",
+            device_type: "firewall",
+            mac: [0x00, 0x09, 0x0f, 0xaa, 0xbb, 0xcc],
+            ip: [203, 0, 113, 1],
+            services: &[(443, "Fortinet FortiOS 7.2.1")],
+        },
+        // Internal app server still exposing Log4Shell via an API.
+        SeedSpec {
+            asset_type: AssetType::It,
+            criticality: Criticality::High,
+            exposure: Exposure::Internal,
+            vendor: "VMware",
+            os: "Linux",
+            device_type: "app-server",
+            mac: [0x00, 0x50, 0x56, 0x12, 0x34, 0x56],
+            ip: [10, 0, 6, 80],
+            services: &[(8080, "Apache Tomcat 9.0.27 Log4j"), (22, "OpenSSH 8.2")],
+        },
+        // Exposed, unauthenticated Redis cache.
+        SeedSpec {
+            asset_type: AssetType::It,
+            criticality: Criticality::Medium,
+            exposure: Exposure::InternetFacing,
+            vendor: "Amazon",
+            os: "Amazon Linux 2",
+            device_type: "data-store",
+            mac: [0x02, 0x42, 0xac, 0x11, 0x00, 0x02],
+            ip: [198, 51, 100, 31],
+            services: &[(6379, "redis")],
+        },
+        // OT camera array on a manufacturing VLAN.
+        SeedSpec {
+            asset_type: AssetType::Iot,
+            criticality: Criticality::Medium,
+            exposure: Exposure::Internal,
+            vendor: "Dahua",
+            os: "embedded-linux",
+            device_type: "ip-camera",
+            mac: [0x3c, 0xef, 0x8c, 0x77, 0x88, 0x99],
+            ip: [10, 0, 9, 33],
+            services: &[(80, "Dahua NVR"), (37777, "Dahua")],
         },
     ]
 }
@@ -260,6 +335,20 @@ mod tests {
             .iter()
             .find(|a| a.asset.fingerprint.device_type.as_deref() == Some("web-server"))
             .expect("web-server seed asset")
+    }
+
+    #[test]
+    fn every_seed_asset_has_at_least_one_vuln_and_nonzero_risk() {
+        // Guards against a seed silently scoring 0.0 (e.g. an unfingerprintable
+        // "https"-only service that correlates nothing).
+        for a in seed_assets() {
+            let label = a.asset.fingerprint.device_type.clone().unwrap_or_default();
+            assert!(
+                !a.vulnerabilities.is_empty(),
+                "seed asset '{label}' correlated zero vulnerabilities"
+            );
+            assert!(a.risk.value > 0.0, "seed asset '{label}' scored risk 0.0");
+        }
     }
 
     #[test]

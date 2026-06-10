@@ -2,6 +2,14 @@
 //!
 //! A seed set with real CVE ids, CVSS, approximate EPSS and CISA-KEV flags. The
 //! full NVD/EPSS/KEV feeds plug in behind the same [`CveRecord`] shape later.
+//!
+//! Two kinds of records:
+//! - **versioned** product entries (`OpenSSH`, `Apache httpd`, …) match when a
+//!   service exposes a product string with a version (nmap fingerprints, the
+//!   seed, or an imported nmap-XML);
+//! - **protocol-level** entries (`smb`, `rdp`, …) use [`VersionRange::Any`] so
+//!   they correlate even on a bare connect-scan, where only the service name is
+//!   known.
 
 use argus_core::Severity;
 
@@ -9,19 +17,31 @@ use crate::{CveRecord, VersionRange};
 
 /// The bundled CVE catalog.
 pub const CATALOG: &[CveRecord] = &[
+    // ---- Remote access / SSH ----------------------------------------------
     CveRecord {
         cve_id: "CVE-2024-6387",
         product: "OpenSSH",
         affected: VersionRange::Range("8.5", "9.7"),
         cvss: 8.1,
         epss: 0.62,
-        kev: false,
+        kev: true,
         severity: Severity::High,
         summary: "regreSSHion: unauthenticated RCE in OpenSSH server (sshd)",
     },
     CveRecord {
+        cve_id: "CVE-2018-15473",
+        product: "OpenSSH",
+        affected: VersionRange::LessThan("7.7"),
+        cvss: 5.3,
+        epss: 0.78,
+        kev: false,
+        severity: Severity::Medium,
+        summary: "OpenSSH username enumeration via timing/auth response",
+    },
+    // ---- Web servers ------------------------------------------------------
+    CveRecord {
         cve_id: "CVE-2021-41773",
-        product: "Apache",
+        product: "Apache httpd",
         affected: VersionRange::Exact("2.4.49"),
         cvss: 7.5,
         epss: 0.975,
@@ -29,6 +49,27 @@ pub const CATALOG: &[CveRecord] = &[
         severity: Severity::High,
         summary: "Apache httpd 2.4.49 path traversal and remote code execution",
     },
+    CveRecord {
+        cve_id: "CVE-2021-42013",
+        product: "Apache httpd",
+        affected: VersionRange::Exact("2.4.50"),
+        cvss: 9.8,
+        epss: 0.975,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Apache httpd 2.4.50 path traversal RCE (incomplete fix for 41773)",
+    },
+    CveRecord {
+        cve_id: "CVE-2013-2028",
+        product: "nginx",
+        affected: VersionRange::Range("1.3.9", "1.4.0"),
+        cvss: 7.5,
+        epss: 0.51,
+        kev: false,
+        severity: Severity::High,
+        summary: "nginx chunked-transfer stack buffer overflow",
+    },
+    // ---- FTP / mail -------------------------------------------------------
     CveRecord {
         cve_id: "CVE-2011-2523",
         product: "vsftpd",
@@ -40,6 +81,27 @@ pub const CATALOG: &[CveRecord] = &[
         summary: "vsftpd 2.3.4 backdoor command execution",
     },
     CveRecord {
+        cve_id: "CVE-2015-3306",
+        product: "ProFTPD",
+        affected: VersionRange::Exact("1.3.5"),
+        cvss: 9.8,
+        epss: 0.95,
+        kev: false,
+        severity: Severity::Critical,
+        summary: "ProFTPD 1.3.5 mod_copy unauthenticated remote command execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2019-10149",
+        product: "Exim",
+        affected: VersionRange::Range("4.87", "4.91"),
+        cvss: 9.8,
+        epss: 0.94,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Exim 'Return of the WIZard' remote command execution",
+    },
+    // ---- SMB / Windows ----------------------------------------------------
+    CveRecord {
         cve_id: "CVE-2017-0144",
         product: "smb",
         affected: VersionRange::Any,
@@ -50,6 +112,27 @@ pub const CATALOG: &[CveRecord] = &[
         summary: "EternalBlue: SMBv1 remote code execution",
     },
     CveRecord {
+        cve_id: "CVE-2020-0796",
+        product: "smb",
+        affected: VersionRange::Any,
+        cvss: 10.0,
+        epss: 0.79,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "SMBGhost: SMBv3 compression remote code execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2017-7494",
+        product: "Samba",
+        affected: VersionRange::Range("3.5.0", "4.6.4"),
+        cvss: 9.8,
+        epss: 0.92,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "SambaCry: writable-share remote code execution",
+    },
+    // ---- RDP --------------------------------------------------------------
+    CveRecord {
         cve_id: "CVE-2019-0708",
         product: "rdp",
         affected: VersionRange::Any,
@@ -59,16 +142,164 @@ pub const CATALOG: &[CveRecord] = &[
         severity: Severity::Critical,
         summary: "BlueKeep: Remote Desktop Services remote code execution",
     },
+    // ---- TLS / crypto -----------------------------------------------------
+    CveRecord {
+        cve_id: "CVE-2014-0160",
+        product: "OpenSSL",
+        affected: VersionRange::Range("1.0.1", "1.0.1f"),
+        cvss: 7.5,
+        epss: 0.97,
+        kev: false,
+        severity: Severity::High,
+        summary: "Heartbleed: OpenSSL TLS heartbeat memory disclosure",
+    },
+    // ---- Databases --------------------------------------------------------
+    CveRecord {
+        cve_id: "CVE-2012-2122",
+        product: "MySQL",
+        affected: VersionRange::Range("5.1.0", "5.6.5"),
+        cvss: 5.5,
+        epss: 0.60,
+        kev: false,
+        severity: Severity::Medium,
+        summary: "MySQL/MariaDB authentication bypass via memcmp timing",
+    },
+    CveRecord {
+        cve_id: "CVE-2022-0543",
+        product: "redis",
+        affected: VersionRange::Any,
+        cvss: 10.0,
+        epss: 0.91,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Redis Lua sandbox escape leading to remote code execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2015-1427",
+        product: "elasticsearch",
+        affected: VersionRange::Any,
+        cvss: 7.5,
+        epss: 0.90,
+        kev: true,
+        severity: Severity::High,
+        summary: "Elasticsearch Groovy scripting sandbox bypass (RCE)",
+    },
+    // ---- App servers / middleware -----------------------------------------
+    CveRecord {
+        cve_id: "CVE-2020-1938",
+        product: "Tomcat",
+        affected: VersionRange::Range("9.0.0", "9.0.30"),
+        cvss: 9.8,
+        epss: 0.94,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Ghostcat: Apache Tomcat AJP file read / inclusion to RCE",
+    },
+    CveRecord {
+        cve_id: "CVE-2024-23897",
+        product: "Jenkins",
+        affected: VersionRange::AtMost("2.441"),
+        cvss: 9.8,
+        epss: 0.85,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Jenkins CLI arbitrary file read (path to remote code execution)",
+    },
+    CveRecord {
+        cve_id: "CVE-2021-44228",
+        product: "Log4j",
+        affected: VersionRange::Any,
+        cvss: 10.0,
+        epss: 0.975,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Log4Shell: Apache Log4j2 JNDI remote code execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2022-22965",
+        product: "Spring",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.96,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Spring4Shell: Spring Framework data-binding remote code execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2024-4577",
+        product: "PHP",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.94,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "PHP-CGI argument injection on Windows (RCE)",
+    },
+    // ---- Enterprise edge / collaboration ----------------------------------
+    CveRecord {
+        cve_id: "CVE-2021-34473",
+        product: "Exchange",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.975,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "ProxyShell: Microsoft Exchange pre-auth remote code execution",
+    },
+    CveRecord {
+        cve_id: "CVE-2023-4966",
+        product: "Citrix",
+        affected: VersionRange::Any,
+        cvss: 9.4,
+        epss: 0.96,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "CitrixBleed: NetScaler ADC/Gateway session-token disclosure",
+    },
+    CveRecord {
+        cve_id: "CVE-2022-40684",
+        product: "FortiOS",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.96,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Fortinet FortiOS/FortiProxy authentication bypass on admin interface",
+    },
+    CveRecord {
+        cve_id: "CVE-2022-26134",
+        product: "Confluence",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.975,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Atlassian Confluence OGNL injection unauthenticated RCE",
+    },
+    CveRecord {
+        cve_id: "CVE-2021-21972",
+        product: "vCenter",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.97,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "VMware vCenter vSphere Client (vROps) unauthenticated RCE",
+    },
+    // ---- Supply chain -----------------------------------------------------
     CveRecord {
         cve_id: "CVE-2024-3094",
         product: "xz",
         affected: VersionRange::Range("5.6.0", "5.6.1"),
         cvss: 10.0,
         epss: 0.70,
-        kev: true,
+        // Caught before the backdoored 5.6.0/5.6.1 reached stable distros; no
+        // evidence of in-the-wild exploitation, so not on the CISA KEV catalog.
+        kev: false,
         severity: Severity::Critical,
-        summary: "xz/liblzma upstream backdoor",
+        summary: "xz/liblzma upstream backdoor (CVE-2024-3094)",
     },
+    // ---- IoT cameras ------------------------------------------------------
     CveRecord {
         cve_id: "CVE-2021-36260",
         product: "Hikvision",
@@ -79,6 +310,27 @@ pub const CATALOG: &[CveRecord] = &[
         severity: Severity::Critical,
         summary: "Hikvision IP camera web server command injection (unauthenticated RCE)",
     },
+    CveRecord {
+        cve_id: "CVE-2021-33044",
+        product: "Dahua",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.88,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Dahua IP camera/NVR authentication bypass via crafted login",
+    },
+    CveRecord {
+        cve_id: "CVE-2018-10661",
+        product: "Axis",
+        affected: VersionRange::Any,
+        cvss: 9.8,
+        epss: 0.70,
+        kev: false,
+        severity: Severity::Critical,
+        summary: "Axis communications camera authorization bypass (chained to RCE)",
+    },
+    // ---- OT / ICS ---------------------------------------------------------
     CveRecord {
         cve_id: "CVE-2020-15782",
         product: "SIMATIC",

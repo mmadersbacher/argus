@@ -92,15 +92,39 @@ fn extract_version(product: &str) -> Option<&str> {
         .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
 }
 
+/// Split a product string into lowercase alphanumeric tokens.
+///
+/// `"Apache Tomcat 9.0.27 Log4j"` → `["apache", "tomcat", "9", "0", "27", "log4j"]`.
+fn tokenize(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Whether a service's tokens contain every word of a catalog product token.
+///
+/// Word-boundary (whole-token) matching, not raw substring — so `"Praxis"`
+/// does not match the `"Axis"` record and `"Offspring"` does not match
+/// `"Spring"`, while `"Apache httpd 2.4.49"` still matches `"Apache httpd"`.
+fn product_matches(service_tokens: &[String], catalog_product: &str) -> bool {
+    let needles = tokenize(catalog_product);
+    !needles.is_empty()
+        && needles
+            .iter()
+            .all(|needle| service_tokens.iter().any(|t| t == needle))
+}
+
 /// Correlate a single service product string (e.g. `"OpenSSH 8.9p1"`, `"smb"`)
 /// against the catalog.
 #[must_use]
 pub fn correlate_product(product: &str) -> Vec<Vulnerability> {
-    let lower = product.to_lowercase();
+    let tokens = tokenize(product);
     let version = extract_version(product);
     catalog::CATALOG
         .iter()
-        .filter(|rec| lower.contains(&rec.product.to_lowercase()))
+        .filter(|rec| product_matches(&tokens, rec.product))
         .filter(|rec| match rec.affected {
             VersionRange::Any => true,
             range => version.is_some_and(|v| range.contains(v)),
@@ -177,6 +201,77 @@ mod tests {
         assert!(correlate_product("rdp")
             .iter()
             .any(|v| v.cve_id == "CVE-2019-0708"));
+    }
+
+    #[test]
+    fn smb_correlates_both_eternalblue_and_smbghost() {
+        let vulns = correlate_product("smb");
+        assert!(vulns.iter().any(|v| v.cve_id == "CVE-2017-0144"));
+        assert!(vulns.iter().any(|v| v.cve_id == "CVE-2020-0796"));
+    }
+
+    #[test]
+    fn versioned_products_match_in_range_only() {
+        // Exim 4.89 is inside the Return-of-WIZard range; 4.95 is not.
+        assert!(correlate_product("Exim 4.89")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2019-10149"));
+        assert!(!correlate_product("Exim 4.95")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2019-10149"));
+        // Tomcat Ghostcat is version-bounded.
+        assert!(correlate_product("Apache Tomcat 9.0.27")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2020-1938"));
+    }
+
+    #[test]
+    fn protocol_token_products_correlate() {
+        for (product, cve) in [
+            ("redis", "CVE-2022-0543"),
+            ("Citrix NetScaler Gateway", "CVE-2023-4966"),
+            ("Fortinet FortiOS 7.2.1", "CVE-2022-40684"),
+            ("Apache Tomcat 9.0.27 Log4j", "CVE-2021-44228"),
+        ] {
+            assert!(
+                correlate_product(product).iter().any(|v| v.cve_id == cve),
+                "{product} should correlate {cve}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbleed_range_excludes_the_patched_release() {
+        // OpenSSL 1.0.1 .. 1.0.1f is vulnerable; 1.0.1g is the fix.
+        assert!(correlate_product("OpenSSL 1.0.1f")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2014-0160"));
+        assert!(correlate_product("OpenSSL 1.0.1g")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2014-0160"));
+    }
+
+    #[test]
+    fn word_boundary_match_avoids_substring_false_positives() {
+        // "Praxis" must not match the "Axis" record; "Offspring" must not match
+        // "Spring"; an unrelated banner must not pick up "php"/"xz" by substring.
+        assert!(correlate_product("Praxis EMR 2.0")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2018-10661"));
+        assert!(correlate_product("Offspring Media Server 1.0")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2022-22965"));
+        assert!(correlate_product("Pxz Appliance").is_empty());
+    }
+
+    #[test]
+    fn tomcat_log4j_banner_matches_exactly_its_two_cves() {
+        let vulns = correlate_product("Apache Tomcat 9.0.27 Log4j");
+        let has = |id: &str| vulns.iter().any(|v| v.cve_id == id);
+        assert!(has("CVE-2020-1938")); // Ghostcat (Tomcat range)
+        assert!(has("CVE-2021-44228")); // Log4Shell
+                                        // Must NOT pick up the "Apache httpd" record (no "httpd" token).
+        assert!(!has("CVE-2021-41773"));
     }
 
     #[test]
