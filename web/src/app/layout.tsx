@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Argus — Cyber Exposure Management",
+  title: "Argus — Exposure Console",
   description:
     "Continuous asset discovery, fingerprinting and exposure scoring.",
 };

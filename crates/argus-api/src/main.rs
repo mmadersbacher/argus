@@ -30,6 +30,7 @@ mod db;
 mod monitor;
 mod seed;
 mod store;
+mod vulns;
 
 use auth::{AuthContext, AuthKeys, LoginLimiter};
 use seed::{scored_from_discovered, seed_assets, ScoredAsset, Summary};
@@ -224,6 +225,7 @@ fn router(state: AppState) -> Router {
         .route("/api/assets", get(list_assets))
         .route("/api/assets/{id}", get(get_asset))
         .route("/api/summary", get(summary))
+        .route("/api/vulns", get(vulns::list_vulns))
         .route("/api/events", get(monitor::list_events))
         .route(
             "/api/monitor",

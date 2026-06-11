@@ -7,15 +7,18 @@ export type IconName =
   | "activity"
   | "shield"
   | "sliders"
-  | "eye"
   | "search"
   | "network"
   | "cpu"
   | "smartphone"
   | "cloud"
-  | "clock"
   | "chevron"
-  | "chat";
+  | "bug"
+  | "gauge"
+  | "menu"
+  | "x"
+  | "external"
+  | "logout";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = {
@@ -27,6 +30,10 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     strokeWidth: 1.7,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
+    // Icons are always decorative — the accessible name lives on the
+    // surrounding button/link (aria-label) or adjacent text.
+    "aria-hidden": true,
+    focusable: "false" as const,
   };
   switch (name) {
     case "grid":
@@ -74,13 +81,6 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
           <circle cx="8" cy="17" r="2" fill="currentColor" stroke="none" />
         </svg>
       );
-    case "eye":
-      return (
-        <svg {...common}>
-          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      );
     case "search":
       return (
         <svg {...common}>
@@ -117,23 +117,54 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
           <path d="M7 18a4 4 0 0 1 .6-8A5.5 5.5 0 0 1 18 11.5 3.5 3.5 0 0 1 17.5 18H7Z" />
         </svg>
       );
-    case "clock":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8.5" />
-          <path d="M12 7.5V12l3 2" />
-        </svg>
-      );
     case "chevron":
       return (
         <svg {...common}>
           <path d="m6 9 6 6 6-6" />
         </svg>
       );
-    case "chat":
+    case "bug":
       return (
         <svg {...common}>
-          <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 3V6a1 1 0 0 1 1-1Z" />
+          <rect x="8" y="8" width="8" height="11" rx="4" />
+          <path d="m9.3 7.3-1.8-2M14.7 7.3l1.8-2" />
+          <path d="M8 11.5H4.5M8 15H5M16 11.5h3.5M16 15h3" />
+        </svg>
+      );
+    case "gauge":
+      return (
+        <svg {...common}>
+          <path d="M3.4 18.5a10 10 0 1 1 17.2 0" />
+          <path d="m12 14 4-4.5" />
+          <circle cx="12" cy="14" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "menu":
+      return (
+        <svg {...common}>
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      );
+    case "x":
+      return (
+        <svg {...common}>
+          <path d="m6 6 12 12M18 6 6 18" />
+        </svg>
+      );
+    case "external":
+      return (
+        <svg {...common}>
+          <path d="M10 5.5H6.5A1.5 1.5 0 0 0 5 7v10.5A1.5 1.5 0 0 0 6.5 19H17a1.5 1.5 0 0 0 1.5-1.5V14" />
+          <path d="M14 4.5h5.5V10" />
+          <path d="M19.5 4.5 11 13" />
+        </svg>
+      );
+    case "logout":
+      return (
+        <svg {...common}>
+          <path d="M10 4.5H6A1.5 1.5 0 0 0 4.5 6v12A1.5 1.5 0 0 0 6 19.5h4" />
+          <path d="m15.5 8 4 4-4 4" />
+          <path d="M19.5 12H9.5" />
         </svg>
       );
     default:

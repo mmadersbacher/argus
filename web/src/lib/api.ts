@@ -206,11 +206,13 @@ export type { Role, Session };
 export const getSummary = () => fetchJSON<Summary>("/api/summary");
 export const getAssets = () => fetchJSON<ScoredAsset[]>("/api/assets");
 
-export const runScan = (target: string) =>
+/** `deep` is only sent when true so the request shape stays unchanged for
+ *  existing single-argument callers. */
+export const runScan = (target: string, deep?: boolean) =>
   fetchJSON<ScanResult>("/api/scan", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ target }),
+    body: JSON.stringify(deep ? { target, deep } : { target }),
   });
 
 export interface ImportResult {
@@ -296,6 +298,29 @@ export type MonitorConfig =
   | ({ configured: true; last_run_at: string | null } & MonitorSettings);
 
 export const fetchMonitor = () => fetchJSON<MonitorConfig>("/api/monitor");
+
+// ---- vulnerabilities --------------------------------------------------------
+
+export interface VulnAffectedAsset {
+  id: string;
+  name: string;
+  risk: number;
+  band: RiskBand;
+}
+
+/** Vulnerability rollup across the inventory — one row per CVE. */
+export interface VulnRow {
+  cve_id: string;
+  severity: Severity;
+  cvss: number | null;
+  epss: number | null;
+  kev: boolean;
+  affected: VulnAffectedAsset[];
+}
+
+export async function fetchVulns(): Promise<VulnRow[]> {
+  return fetchJSON<VulnRow[]>("/api/vulns");
+}
 
 /** Requires analyst or higher; 400 carries the validation error as text. */
 export const saveMonitor = (cfg: MonitorSettings) =>

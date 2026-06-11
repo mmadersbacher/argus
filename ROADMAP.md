@@ -2,15 +2,21 @@
 
 Tracking the phased build from the design spec. Checkboxes are the live task list.
 
-**Status (2026-06-10):** P0 + P1 complete and verified — a working, persistent,
+**Status (2026-06-11):** P0 + P1 complete and verified — a working, persistent,
 CVE-correlating CAASM / exposure-management platform with a polished console —
 plus the SaaS foundation from P3: authentication (Argon2 + JWT + API keys),
 enforced multi-tenancy (tenant-scoped schema + queries), RBAC, audit log,
 login/signup console flow and hardened CORS. The first P2 capability —
-**continuous monitoring + change detection** — is now in too: scheduled
-per-tenant re-scans that diff against the stored inventory and surface a
-change-event feed in the console. The remaining P2 / P3 work (passive sensing,
-trained classifier, connectors, policy/reporting, billing) is multi-week.
+**continuous monitoring + change detection** — is in: scheduled per-tenant
+re-scans that diff against the stored inventory and surface a change-event
+feed in the console. **Console v2** landed on top: a professional redesign
+(design tokens, shared UI primitives, labeled sidebar, functional global
+search) and the three remaining placeholder pages are now real —
+Vulnerabilities (backed by a new tenant-wide `GET /api/vulns` CVE
+aggregation), Network (subnet-grouped inventory) and Risk (distribution,
+top-risk assets, risk-change history). The remaining P2 / P3 work (passive
+sensing, trained classifier, connectors, policy/reporting, billing) is
+multi-week.
 
 ## P0 — Foundations ✅
 - [x] Repo + design spec
@@ -48,6 +54,14 @@ trained classifier, connectors, policy/reporting, billing) is multi-week.
 - [x] Multi-tenancy enforced: sqlx migrations, tenant-scoped assets/users/keys, self-service tenant signup
 - [x] RBAC (`viewer`/`analyst`/`admin`) on every route + per-tenant audit log
 - [x] Console: login/signup page, session handling, user & API-key management (Settings)
+- [x] Console v2: professional redesign — design-token system + shared UI
+      primitives (`web/src/components/ui.tsx`), labeled navy sidebar with
+      sections, mobile slide-over nav, functional global search (`/assets?q=`),
+      a11y pass (focus rings, dialog/switch semantics) — and all placeholder
+      pages completed: Vulnerabilities (new tenant-wide `GET /api/vulns`
+      aggregation: severity/CVSS/EPSS maxima, KEV-first ordering, affected
+      assets), Network (subnet-grouped host grid), Risk (distribution,
+      top-10 assets, risk-change feed)
 - [ ] `argus-policy`: advisory segmentation
 - [ ] `argus-report`: compliance / exec reports
 - [ ] IR workflows, billing fields

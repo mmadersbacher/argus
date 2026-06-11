@@ -1,11 +1,5 @@
-import { Placeholder } from "@/components/placeholder";
+import { VulnsView } from "@/components/vulns-view";
 
 export default function Page() {
-  return (
-    <Placeholder
-      title="Vulnerabilities"
-      icon="alert"
-      note="A dedicated CVE-centric view. For now, CVEs show per asset under Assets."
-    />
-  );
+  return <VulnsView />;
 }

@@ -1,27 +1,42 @@
 @import "tailwindcss";
 
-/* ---- Argus design tokens (light console, red brand — Armis-style) ---- */
+/* ---- Argus Console v2 design tokens ----------------------------------------
+   Calm, dense, professional light theme. Royal-blue accent, deep-navy sidebar.
+   Consumed exclusively through Tailwind utilities (bg-surface, text-muted,
+   border-line, …) — never reference the raw variables in components. */
 @theme {
-  --color-bg: #f3f4f7; /* app page */
+  /* canvas & surfaces */
+  --color-bg: #f6f7f9; /* app page */
   --color-surface: #ffffff; /* cards / panels */
-  --color-surface-2: #f6f7f9; /* subtle fills */
-  --color-line: #e4e6eb; /* hairline borders */
-  --color-fg: #1b1f2a; /* primary text */
-  --color-muted: #6b7280; /* secondary text */
+  --color-surface-2: #f3f4f6; /* subtle fills, table headers */
+  --color-line: #e5e7eb; /* hairline borders */
+  --color-line-strong: #d1d5db; /* emphasized borders / toggle tracks */
 
-  --color-accent: #2563eb; /* brand — royal blue */
-  --color-accent-2: #1d4ed8; /* deeper blue (hover) */
+  /* text */
+  --color-fg: #101828; /* primary text */
+  --color-fg-2: #344054; /* secondary headings / labels */
+  --color-muted: #667085; /* secondary text */
+  --color-faint: #98a2b3; /* decorative only (separators, em-dashes) — real content and interactive elements use muted */
 
-  /* deep navy rail (was Armis deep purple) */
-  --color-sidebar: #0f1e3d;
-  --color-sidebar-2: #1c3257; /* active item panel */
-  --color-sidebar-fg: #aebfd8; /* idle label */
-  --color-sidebar-icon: #7e9bc7; /* idle icon */
+  /* brand & semantic */
+  --color-accent: #2563eb; /* royal blue — primary actions, active nav, links */
+  --color-accent-2: #1d4ed8; /* hover */
+  --color-accent-soft: #eff4ff; /* soft accent fills */
+  --color-ok: #047857;
+  --color-warn: #b45309;
 
-  --color-crit: #dc2626;
-  --color-high: #ea580c;
-  --color-med: #d97706;
-  --color-low: #0ea5e9; /* sky — distinct from the royal-blue brand */
+  /* deep-navy sidebar */
+  --color-sidebar: #0c1a30;
+  --color-sidebar-2: #16294a; /* active item panel */
+  --color-sidebar-fg: #a9bad4; /* idle label */
+  --color-sidebar-icon: #7e96bd; /* idle icon, overlines */
+
+  /* risk semantics (only for risk meaning, never decoration);
+     shades chosen so small text passes 4.5:1 on white and the /10 badge fills */
+  --color-crit: #b91c1c;
+  --color-high: #c2410c;
+  --color-med: #b45309;
+  --color-low: #0369a1;
   --color-info: #64748b;
 
   --font-sans: var(--font-geist-sans);

@@ -1,7 +1,10 @@
 "use client";
 
 // App-Router error boundary: a render throw anywhere in a route segment lands
-// here instead of blanking the app. Minimal in-design card with a retry.
+// here instead of blanking the app. In-design crit-accented panel with retry.
+
+import { Icon } from "@/components/icon";
+import { Button } from "@/components/ui";
 
 export default function Error({
   error,
@@ -11,21 +14,22 @@ export default function Error({
   reset: () => void;
 }) {
   return (
-    <div className="argus-rise">
-      <div className="rounded-xl border border-crit/30 bg-crit/5 p-6">
-        <div className="flex items-center gap-2 font-medium text-crit">
-          <span className="h-2 w-2 rounded-full bg-crit" /> Something went wrong
+    <div className="argus-rise mx-auto max-w-lg pt-10">
+      <div className="rounded-xl border border-crit/25 bg-surface p-6 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-crit/10 text-crit">
+          <Icon name="alert" size={18} />
         </div>
-        <p className="mt-2 text-sm text-muted">
+        <h2 className="mt-3 text-sm font-semibold text-fg">
+          Something went wrong
+        </h2>
+        <p className="mt-1 text-sm text-muted">
           {error.message || "An unexpected error interrupted this view."}
         </p>
-        <button
-          type="button"
-          onClick={reset}
-          className="mt-4 rounded-lg border border-line px-3 py-1.5 text-sm text-fg transition-colors hover:bg-surface-2"
-        >
-          Try again
-        </button>
+        <div className="mt-4">
+          <Button variant="secondary" size="sm" onClick={reset}>
+            Try again
+          </Button>
+        </div>
       </div>
     </div>
   );

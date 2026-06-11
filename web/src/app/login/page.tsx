@@ -4,7 +4,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArgusMark } from "@/components/argus-mark";
+import { BrandTile } from "@/components/argus-mark";
+import { Button, Field, FormError, Input } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 
 type Mode = "login" | "register";
@@ -44,11 +45,12 @@ export default function LoginPage() {
   const tab = (m: Mode, label: string) => (
     <button
       type="button"
+      aria-pressed={mode === m}
       onClick={() => {
         setMode(m);
         setError(null);
       }}
-      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+      className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
         mode === m
           ? "bg-surface text-fg shadow-sm"
           : "text-muted hover:text-fg"
@@ -58,82 +60,74 @@ export default function LoginPage() {
     </button>
   );
 
-  const field =
-    "w-full rounded-lg border border-line bg-surface px-3 py-2.5 text-sm text-fg outline-none transition-colors placeholder:text-muted focus:border-accent";
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg p-6">
       <div className="argus-rise w-full max-w-sm">
-        <div className="mb-6 flex flex-col items-center gap-2">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#3b82f6] to-[#1e3a8a] text-white shadow-lg shadow-black/20 ring-1 ring-white/15">
-            <ArgusMark size={28} />
+        {/* brand lockup */}
+        <div className="mb-6 flex flex-col items-center gap-3">
+          <BrandTile size={48} markSize={28} />
+          <div className="text-center leading-tight">
+            <p className="text-base font-semibold tracking-[0.18em] text-fg">
+              ARGUS
+            </p>
+            <p className="mt-1 text-sm text-muted">Exposure Console</p>
           </div>
-          <h1 className="text-lg font-semibold tracking-tight">
-            Argus Console
-          </h1>
-          <p className="text-sm text-muted">
-            Cyber exposure &amp; asset intelligence
-          </p>
         </div>
 
-        <div className="rounded-2xl border border-line bg-surface p-5 shadow-sm">
-          <div className="mb-4 flex gap-1 rounded-xl bg-surface-2 p-1">
+        <div className="rounded-xl border border-line bg-surface p-6 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+          {/* mode switch */}
+          <div className="mb-5 flex gap-1 rounded-lg bg-surface-2 p-1">
             {tab("login", "Sign in")}
             {tab("register", "Create organization")}
           </div>
 
-          <form onSubmit={submit} className="flex flex-col gap-3">
+          <form onSubmit={submit} className="space-y-4">
             {mode === "register" && (
-              <input
-                className={field}
-                placeholder="Organization name"
-                value={organization}
-                onChange={(e) => setOrganization(e.target.value)}
+              <Field label="Organization name">
+                <Input
+                  placeholder="Acme Corp"
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </Field>
+            )}
+            <Field label="Email">
+              <Input
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
-                autoFocus
+                autoComplete="email"
               />
-            )}
-            <input
-              className={field}
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-            <input
-              className={field}
-              type="password"
-              placeholder={
-                mode === "register" ? "Password (min 10 chars)" : "Password"
-              }
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={mode === "register" ? 10 : undefined}
-              autoComplete={
-                mode === "register" ? "new-password" : "current-password"
-              }
-            />
-
-            {error && (
-              <p className="rounded-lg border border-crit/30 bg-crit/5 px-3 py-2 text-sm text-crit">
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="mt-1 rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent-2 disabled:opacity-60"
+            </Field>
+            <Field
+              label="Password"
+              hint={mode === "register" ? "At least 10 characters." : undefined}
             >
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={mode === "register" ? 10 : undefined}
+                autoComplete={
+                  mode === "register" ? "new-password" : "current-password"
+                }
+              />
+            </Field>
+
+            {error && <FormError>{error}</FormError>}
+
+            <Button type="submit" disabled={busy} className="w-full">
               {busy
                 ? "Working…"
                 : mode === "login"
                   ? "Sign in"
                   : "Create organization"}
-            </button>
+            </Button>
           </form>
         </div>
 

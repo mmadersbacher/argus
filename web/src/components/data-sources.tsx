@@ -1,8 +1,9 @@
-// Data Sources grid (Armis-style). Honest split: connectors that actually feed
-// the inventory ("Connected", live) vs. roadmap integrations ("Planned", not
+// Data sources panel. Honest split: connectors that actually feed the
+// inventory ("Connected", live) vs. roadmap integrations ("Planned", not
 // yet built — no connector code exists for these).
 
 import { Icon, type IconName } from "@/components/icon";
+import { Badge, Panel } from "@/components/ui";
 import type { ScoredAsset, Summary } from "@/lib/api";
 
 type Planned = { name: string; sub: string; icon: IconName };
@@ -49,61 +50,76 @@ export function DataSources({
   ];
 
   return (
-    <section className="space-y-6">
-      {/* connected (real) */}
-      <div>
-        <div className="mb-3 flex items-end justify-between">
-          <div>
-            <div className="text-xs text-muted">Grouped by</div>
-            <h2 className="text-base font-semibold">Data Source ({connected.length})</h2>
+    <Panel
+      title="Data sources"
+      description="Feeds and sensors populating the inventory"
+    >
+      <div className="space-y-6">
+        {/* connected (real) */}
+        <div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+              Connected · {connected.length}
+            </p>
+            <span className="text-xs text-muted">live feeds &amp; sensors</span>
           </div>
-          <span className="text-xs text-muted">live feeds &amp; sensors</span>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {connected.map((s) => (
+              <div
+                key={s.name}
+                className="rounded-lg border border-line bg-surface p-3.5"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-fg-2">
+                    <Icon name={s.icon} size={16} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium leading-tight text-fg">
+                      {s.name}
+                    </p>
+                    <p className="truncate text-xs text-muted">{s.sub}</p>
+                  </div>
+                </div>
+                <p className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium tabular-nums text-ok">
+                  <span className="h-1.5 w-1.5 rounded-full bg-ok" />
+                  {s.metric}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          {connected.map((s) => (
-            <div
-              key={s.name}
-              className="flex flex-col items-center gap-1.5 rounded-xl border border-line bg-surface p-4 text-center"
-            >
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent/10 text-accent">
-                <Icon name={s.icon} size={22} />
-              </span>
-              <span className="text-sm font-medium leading-tight">{s.name}</span>
-              <span className="text-[11px] text-muted">{s.sub}</span>
-              <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {s.metric}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
 
-      {/* planned (roadmap) */}
-      <div>
-        <div className="mb-3 flex items-end justify-between">
-          <h2 className="text-base font-semibold">
-            Integrations <span className="font-normal text-muted">· planned</span>
-          </h2>
-          <span className="text-xs text-muted">roadmap — not yet built</span>
-        </div>
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-          {planned.map((s) => (
-            <div
-              key={s.name}
-              className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-line bg-surface-2 p-4 text-center"
-            >
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface text-muted">
-                <Icon name={s.icon} size={20} />
-              </span>
-              <span className="text-sm font-medium leading-tight">{s.name}</span>
-              <span className="text-[11px] text-muted">{s.sub}</span>
-              <span className="mt-1 rounded-full border border-line px-2 py-0.5 text-[10px] font-medium text-muted">
-                Planned
-              </span>
-            </div>
-          ))}
+        {/* planned (roadmap) */}
+        <div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+              Planned · {planned.length}
+            </p>
+            <span className="text-xs text-muted">roadmap — not yet built</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+            {planned.map((s) => (
+              <div
+                key={s.name}
+                className="flex flex-col items-start gap-2.5 rounded-lg border border-dashed border-line bg-surface-2/50 p-3"
+              >
+                <div className="flex w-full items-center gap-2.5">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface text-faint">
+                    <Icon name={s.icon} size={15} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium leading-tight text-fg-2">
+                      {s.name}
+                    </p>
+                    <p className="truncate text-[11px] text-muted">{s.sub}</p>
+                  </div>
+                </div>
+                <Badge>Planned</Badge>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
-    </section>
+    </Panel>
   );
 }

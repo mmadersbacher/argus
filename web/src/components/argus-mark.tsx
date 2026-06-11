@@ -20,3 +20,19 @@ export function ArgusMark({ size = 24 }: { size?: number }) {
     </svg>
   );
 }
+
+/** Brand gradient tile — the single source for the Argus logo lockup.
+ *  Sidebar and login import this instead of duplicating the gradient. */
+export function BrandTile({
+  size = 36,
+  markSize = 22,
+}: { size?: number; markSize?: number } = {}) {
+  return (
+    <div
+      className="flex items-center justify-center rounded-xl bg-gradient-to-br from-[#3b82f6] to-[#1e3a8a] text-white shadow-lg shadow-black/40 ring-1 ring-white/15"
+      style={{ width: size, height: size }}
+    >
+      <ArgusMark size={markSize} />
+    </div>
+  );
+}

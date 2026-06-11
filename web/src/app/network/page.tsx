@@ -1,11 +1,5 @@
-import { Placeholder } from "@/components/placeholder";
+import { NetworkView } from "@/components/network-view";
 
 export default function Page() {
-  return (
-    <Placeholder
-      title="Network"
-      icon="network"
-      note="Topology, segmentation and traffic views are on the roadmap."
-    />
-  );
+  return <NetworkView />;
 }

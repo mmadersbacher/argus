@@ -1,6 +1,7 @@
 // Presentation maps: domain enums -> Tailwind classes and labels.
 // Class strings are written as literals so the Tailwind v4 scanner picks them up.
 
+import type { IconName } from "@/components/icon";
 import type { AssetType, Exposure, RiskBand } from "./api";
 
 export interface BandStyle {
@@ -9,15 +10,14 @@ export interface BandStyle {
   bg: string;
   ring: string;
   bar: string;
-  fill: string;
 }
 
 export const bandStyles: Record<RiskBand, BandStyle> = {
-  critical: { label: "Critical", text: "text-crit", bg: "bg-crit/10", ring: "ring-crit/30", bar: "bg-crit", fill: "fill-crit" },
-  high: { label: "High", text: "text-high", bg: "bg-high/10", ring: "ring-high/30", bar: "bg-high", fill: "fill-high" },
-  medium: { label: "Medium", text: "text-med", bg: "bg-med/10", ring: "ring-med/30", bar: "bg-med", fill: "fill-med" },
-  low: { label: "Low", text: "text-low", bg: "bg-low/10", ring: "ring-low/30", bar: "bg-low", fill: "fill-low" },
-  info: { label: "Info", text: "text-info", bg: "bg-info/10", ring: "ring-info/30", bar: "bg-info", fill: "fill-info" },
+  critical: { label: "Critical", text: "text-crit", bg: "bg-crit/10", ring: "ring-crit/25", bar: "bg-crit" },
+  high: { label: "High", text: "text-high", bg: "bg-high/10", ring: "ring-high/25", bar: "bg-high" },
+  medium: { label: "Medium", text: "text-med", bg: "bg-med/10", ring: "ring-med/25", bar: "bg-med" },
+  low: { label: "Low", text: "text-low", bg: "bg-low/10", ring: "ring-low/25", bar: "bg-low" },
+  info: { label: "Info", text: "text-info", bg: "bg-info/10", ring: "ring-info/25", bar: "bg-info" },
 };
 
 export const bandOrder: RiskBand[] = ["critical", "high", "medium", "low", "info"];
@@ -38,6 +38,28 @@ export const exposureLabel: Record<Exposure, string> = {
   internet_facing: "Internet-facing",
   unknown: "Unknown",
 };
+
+/** Icon tile per asset type — shared by the assets, network and risk views. */
+export const assetTypeIcon: Record<AssetType, IconName> = {
+  it: "server",
+  ot: "cpu",
+  iot: "network",
+  iomt: "activity",
+  network: "network",
+  cloud: "cloud",
+  mobile: "smartphone",
+  unknown: "grid",
+};
+
+/** One precision for CVSS scores everywhere: "9.8" or "—". */
+export function formatCvss(c: number | null | undefined): string {
+  return c == null ? "—" : c.toFixed(1);
+}
+
+/** One precision for EPSS scores everywhere: "97.0%" or "—". */
+export function formatEpss(e: number | null | undefined): string {
+  return e == null ? "—" : `${(e * 100).toFixed(1)}%`;
+}
 
 /** Compact relative timestamp for feeds: "just now", "4m ago", "2h ago", "3d ago". */
 export function timeAgo(iso: string): string {

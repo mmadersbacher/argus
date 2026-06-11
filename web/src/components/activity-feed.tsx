@@ -7,9 +7,15 @@ import type { ArgusEvent } from "@/lib/api";
 import { bandOrder, timeAgo } from "@/lib/ui";
 import { useEvents } from "@/lib/use-events";
 import { EmptyState } from "@/components/states";
+import { Badge, Panel } from "@/components/ui";
+
+type BadgeTone = React.ComponentProps<typeof Badge>["tone"];
 
 /** Neutral fallback for unknown kinds / missing detail (version skew). */
-const FALLBACK_BADGE = { label: "Change", cls: "text-muted bg-surface-2 ring-line" };
+const FALLBACK_BADGE: { label: string; tone: BadgeTone } = {
+  label: "Change",
+  tone: "neutral",
+};
 
 /** Severity-rank comparison: lower bandOrder index = worse band. Tolerates a
  *  missing/partial detail (treats it as "not worse"). */
@@ -20,24 +26,21 @@ function gotWorse(e: Extract<ArgusEvent, { kind: "risk.changed" }>): boolean {
   );
 }
 
-function kindBadge(e: ArgusEvent): { label: string; cls: string } {
+function kindBadge(e: ArgusEvent): { label: string; tone: BadgeTone } {
   // Runtime guard: the TS union says detail is always present, but a
   // version-skewed API or a null detail must not crash the render.
   if (e == null || e.detail == null) return FALLBACK_BADGE;
   switch (e.kind) {
     case "asset.new":
-      return { label: "New asset", cls: "text-accent bg-accent/10 ring-accent/30" };
+      return { label: "New asset", tone: "accent" };
     case "services.changed":
-      return { label: "Services", cls: "text-med bg-med/10 ring-med/30" };
+      return { label: "Services", tone: "warn" };
     case "vulns.changed":
-      return { label: "Vulns", cls: "text-crit bg-crit/10 ring-crit/30" };
+      return { label: "Vulns", tone: "danger" };
     case "risk.changed":
       return gotWorse(e)
-        ? { label: "Risk up", cls: "text-crit bg-crit/10 ring-crit/30" }
-        : {
-            label: "Risk down",
-            cls: "text-emerald-600 bg-emerald-500/10 ring-emerald-500/30",
-          };
+        ? { label: "Risk up", tone: "danger" }
+        : { label: "Risk down", tone: "ok" };
     default:
       return FALLBACK_BADGE;
   }
@@ -84,27 +87,29 @@ function summarize(e: ArgusEvent): string {
   }
 }
 
-export function ActivityFeed() {
+export function ActivityFeed({ className }: { className?: string }) {
   const { events, error, loading } = useEvents(20);
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Activity</h2>
-        <span className="text-xs text-muted">latest changes</span>
-      </div>
-
+    <Panel
+      title="Activity"
+      actions={
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted">
+          <span className="argus-pulse h-1.5 w-1.5 rounded-full bg-ok" />
+          Live
+        </span>
+      }
+      className={className}
+      bodyClassName="min-h-0 flex-1 overflow-y-auto p-0"
+    >
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 3 }).map((_, i) => (
+        <div className="space-y-2 p-5">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="h-9 animate-pulse rounded-lg bg-surface-2" />
           ))}
         </div>
       ) : error ? (
-        <p className="text-sm text-muted">
-          <span className="font-medium text-crit">Feed unavailable.</span>{" "}
-          {error}
-        </p>
+        <EmptyState title="Event feed unavailable" hint={error} />
       ) : events.length === 0 ? (
         <EmptyState
           title="No activity yet"
@@ -115,25 +120,22 @@ export function ActivityFeed() {
           {events.map((e) => {
             const badge = kindBadge(e);
             return (
-              <li key={e.id} className="flex items-center gap-3 py-2.5 text-sm">
-                <span
-                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${badge.cls}`}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                  {badge.label}
-                </span>
-                <span className="min-w-0 flex-1 truncate">
+              <li key={e.id} className="px-5 py-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <Badge tone={badge.tone}>{badge.label}</Badge>
+                  <span className="shrink-0 text-xs tabular-nums text-muted">
+                    {timeAgo(e.created_at)}
+                  </span>
+                </div>
+                <p className="mt-1.5 min-w-0 truncate">
                   <span className="font-medium text-fg">{e.asset_name}</span>
                   <span className="text-muted"> · {summarize(e)}</span>
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-muted">
-                  {timeAgo(e.created_at)}
-                </span>
+                </p>
               </li>
             );
           })}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }

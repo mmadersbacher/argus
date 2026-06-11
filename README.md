@@ -6,9 +6,11 @@ platform that continuously discovers, identifies, scores and monitors every asse
 Argus mirrors the *architecture* of enterprise platforms like Armis Centrix™ and runZero,
 built entirely on open-source data and tooling. It is **not** affiliated with Armis.
 
-> Status: **P1 spine + SaaS foundation** — discovery, CVE correlation, risk scoring and the
-> console work end-to-end behind JWT/API-key auth with tenant isolation and RBAC. See
-> [`ROADMAP.md`](ROADMAP.md) and the design spec under [`docs/superpowers/specs/`](docs/superpowers/specs/).
+> Status: **P1 spine + SaaS foundation + Console v2** — discovery, CVE correlation, risk
+> scoring, continuous monitoring and a fully built console (overview, assets, network,
+> vulnerabilities, risk, settings) work end-to-end behind JWT/API-key auth with tenant
+> isolation and RBAC. See [`ROADMAP.md`](ROADMAP.md) and the design spec under
+> [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## What it does (target)
 

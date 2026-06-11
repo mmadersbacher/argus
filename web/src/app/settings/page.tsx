@@ -1,8 +1,9 @@
 "use client";
 
-// Tenant settings: continuous monitoring (visible to every role, editable by
-// analyst+) plus users and API keys (admin-only; other roles get a read-only
-// notice). Connector configuration remains on the roadmap.
+// Tenant settings: account identity (read-only), continuous monitoring
+// (visible to every role, editable by analyst+) plus users and API keys
+// (admin-only; other roles get a read-only notice). Connector configuration
+// remains on the roadmap.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -18,29 +19,64 @@ import {
   type Role,
   type UserSummary,
 } from "@/lib/api";
+import {
+  Badge,
+  Button,
+  Field,
+  FormError,
+  Input,
+  PageHeader,
+  Panel,
+  Select,
+  Toggle,
+} from "@/components/ui";
 import { timeAgo } from "@/lib/ui";
 import { useAuth } from "@/lib/auth";
 
-const field =
-  "rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-muted focus:border-accent";
-const primaryBtn =
-  "rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-2 disabled:opacity-60";
-
-function Section({
-  title,
-  note,
-  children,
-}: {
-  title: string;
-  note: string;
-  children: React.ReactNode;
-}) {
+function RoleBadge({ role }: { role: Role }) {
   return (
-    <section className="rounded-xl border border-line bg-surface p-5">
-      <h2 className="font-semibold text-fg">{title}</h2>
-      <p className="mt-0.5 text-sm text-muted">{note}</p>
-      <div className="mt-4">{children}</div>
-    </section>
+    <Badge tone="neutral">
+      <span className="capitalize">{role}</span>
+    </Badge>
+  );
+}
+
+/** Read-only identity card sourced from the client session. */
+function AccountPanel() {
+  const { session } = useAuth();
+  return (
+    <Panel title="Account" description="Your identity in this organization.">
+      <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-3">
+        <div className="min-w-0">
+          <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            Email
+          </dt>
+          <dd className="mt-1.5 truncate text-sm text-fg">
+            {session?.email ?? "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            Role
+          </dt>
+          <dd className="mt-1.5">
+            {session ? (
+              <RoleBadge role={session.role} />
+            ) : (
+              <span className="text-sm text-muted">—</span>
+            )}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            Tenant ID
+          </dt>
+          <dd className="mt-1.5 break-all font-mono text-xs text-fg-2">
+            {session?.tenant_id ?? "—"}
+          </dd>
+        </div>
+      </dl>
+    </Panel>
   );
 }
 
@@ -54,7 +90,7 @@ const intervals: { minutes: number; label: string }[] = [
 ];
 
 /** Continuous-monitoring card. Read-only for viewers; analyst+ can save. */
-function MonitoringSection({ canEdit }: { canEdit: boolean }) {
+function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
   const [target, setTarget] = useState("");
   const [intervalMin, setIntervalMin] = useState(15);
   const [enabled, setEnabled] = useState(false);
@@ -146,88 +182,70 @@ function MonitoringSection({ canEdit }: { canEdit: boolean }) {
   const formDisabled = !canEdit || loading;
 
   return (
-    <Section
+    <Panel
       title="Continuous monitoring"
-      note="Re-scan a target on a schedule; differences show up as events in the activity feed."
+      description="Re-scan a target on a schedule; differences show up as events in the activity feed."
     >
-      {error && (
-        <p className="mb-3 rounded-lg border border-crit/30 bg-crit/5 px-3 py-2 text-sm text-crit">
-          {error}
-        </p>
-      )}
       <form onSubmit={save} className="space-y-4">
-        <label className="flex w-fit cursor-pointer items-center gap-3 text-sm font-medium text-fg">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label="Enable monitoring"
-            disabled={formDisabled}
-            onClick={() => setEnabled((v) => !v)}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60 ${
-              enabled ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-line"
-            }`}
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow ring-1 ring-line transition-transform ${
-                enabled ? "translate-x-5" : ""
-              }`}
-            />
-          </button>
-          Enable monitoring
-        </label>
+        {error && <FormError>{error}</FormError>}
 
-        <div className="flex flex-wrap gap-2">
-          <input
-            className={`${field} min-w-52 flex-1 font-mono disabled:opacity-60`}
-            placeholder="192.168.1.0/24"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            disabled={formDisabled}
-            aria-label="Monitor target"
-            required
-          />
-          <select
-            className={`${field} disabled:opacity-60`}
-            value={intervalMin}
-            onChange={(e) => setIntervalMin(Number(e.target.value))}
-            disabled={formDisabled}
-            aria-label="Scan interval"
-          >
-            {!intervals.some((i) => i.minutes === intervalMin) && (
-              <option value={intervalMin}>Every {intervalMin} min</option>
-            )}
-            {intervals.map((i) => (
-              <option key={i.minutes} value={i.minutes}>
-                {i.label}
-              </option>
-            ))}
-          </select>
+        <Toggle
+          checked={enabled}
+          onChange={setEnabled}
+          disabled={formDisabled}
+          label="Enable monitoring"
+        />
+
+        <div className="flex flex-wrap gap-3">
+          <div className="min-w-52 flex-1">
+            <Field label="Target">
+              <Input
+                className="font-mono"
+                placeholder="192.168.1.0/24"
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                disabled={formDisabled}
+                aria-label="Monitor target"
+                required
+              />
+            </Field>
+          </div>
+          <div className="w-44">
+            <Field label="Interval">
+              <Select
+                value={intervalMin}
+                onChange={(e) => setIntervalMin(Number(e.target.value))}
+                disabled={formDisabled}
+                aria-label="Scan interval"
+              >
+                {!intervals.some((i) => i.minutes === intervalMin) && (
+                  <option value={intervalMin}>Every {intervalMin} min</option>
+                )}
+                {intervals.map((i) => (
+                  <option key={i.minutes} value={i.minutes}>
+                    {i.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
         </div>
 
-        <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-fg">
-          <input
-            type="checkbox"
-            className="h-4 w-4 accent-accent disabled:opacity-60"
+        <div className="flex w-fit items-center gap-2">
+          <Toggle
             checked={deep}
-            onChange={(e) => setDeep(e.target.checked)}
+            onChange={setDeep}
             disabled={formDisabled}
+            label="Deep scan"
           />
-          Deep scan
           <span className="text-xs text-muted">requires root</span>
-        </label>
+        </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="submit"
-            disabled={busy || formDisabled}
-            className={primaryBtn}
-          >
+          <Button type="submit" disabled={busy || formDisabled}>
             Save
-          </button>
-          {saved && (
-            <span className="text-xs font-medium text-emerald-600">Saved.</span>
-          )}
+          </Button>
+          {saved && <span className="text-xs font-medium text-ok">Saved.</span>}
           {lastRunAt && (
             <span className="text-xs text-muted">
               Last run {timeAgo(lastRunAt)}
@@ -240,7 +258,7 @@ function MonitoringSection({ canEdit }: { canEdit: boolean }) {
           )}
         </div>
       </form>
-    </Section>
+    </Panel>
   );
 }
 
@@ -252,6 +270,7 @@ export default function Page() {
 
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [keys, setKeys] = useState<ApiKeySummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [newEmail, setNewEmail] = useState("");
@@ -267,6 +286,7 @@ export default function Page() {
       const [u, k] = await Promise.all([listUsers(), listApiKeys()]);
       setUsers(u);
       setKeys(k);
+      setLoaded(true);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load settings");
@@ -324,129 +344,202 @@ export default function Page() {
     }
   };
 
-  const roleSelect = (value: Role, onChange: (r: Role) => void) => (
-    <select
-      className={field}
-      value={value}
-      onChange={(e) => onChange(e.target.value as Role)}
-    >
-      <option value="viewer">viewer</option>
-      <option value="analyst">analyst</option>
-      <option value="admin">admin</option>
-    </select>
+  const roleSelect = (
+    value: Role,
+    onChange: (r: Role) => void,
+    ariaLabel: string,
+  ) => (
+    <div className="w-36">
+      <Select
+        value={value}
+        onChange={(e) => onChange(e.target.value as Role)}
+        aria-label={ariaLabel}
+      >
+        <option value="viewer">viewer</option>
+        <option value="analyst">analyst</option>
+        <option value="admin">admin</option>
+      </Select>
+    </div>
   );
 
+  const theadRow =
+    "border-b border-line bg-surface-2/60 text-left text-xs text-muted";
+  // No hover treatment: these rows are not clickable, so the hover affordance
+  // used by the asset/vuln tables would be misleading here.
+  const bodyRow = "border-b border-line last:border-0";
+
   return (
-    <div className="argus-rise space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted">
-          Continuous monitoring, users and machine credentials for your
-          organization.
-        </p>
-      </div>
+    <div className="argus-rise">
+      <PageHeader
+        title="Settings"
+        description="Continuous monitoring, users and machine credentials for your organization."
+      />
 
-      <MonitoringSection canEdit={canEditMonitor} />
+      <div className="space-y-6">
+        <AccountPanel />
 
-      {!isAdmin ? (
-        <p className="max-w-md rounded-xl border border-line bg-surface p-5 text-sm text-muted">
-          User and API-key management requires the <b>admin</b> role. Ask your
-          tenant administrator for access.
-        </p>
-      ) : (
-        <>
-          {error && (
-            <p className="rounded-lg border border-crit/30 bg-crit/5 px-3 py-2 text-sm text-crit">
-              {error}
+        <MonitoringPanel canEdit={canEditMonitor} />
+
+        {!isAdmin ? (
+          <Panel>
+            <p className="text-sm text-muted">
+              User and API-key management requires the <b>admin</b> role. Ask
+              your tenant administrator for access.
             </p>
-          )}
+          </Panel>
+        ) : (
+          <>
+            {error && <FormError>{error}</FormError>}
 
-          <Section
-            title="Users"
-            note="Members of your organization. Emails are global logins."
-          >
-            <table className="w-full text-sm">
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id} className="border-t border-line">
-                    <td className="py-2.5 text-fg">{u.email}</td>
-                    <td className="py-2.5 text-right capitalize text-muted">
-                      {u.role}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <form onSubmit={addUser} className="mt-4 flex flex-wrap gap-2">
-              <input
-                className={`${field} min-w-52 flex-1`}
-                type="email"
-                placeholder="email@company.com"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                required
-              />
-              <input
-                className={`${field} min-w-44`}
-                type="password"
-                placeholder="Initial password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                minLength={10}
-                required
-              />
-              {roleSelect(newRole, setNewRole)}
-              <button type="submit" disabled={busy} className={primaryBtn}>
-                Add user
-              </button>
-            </form>
-          </Section>
+            <Panel
+              title="Users"
+              description="Members of your organization. Emails are global logins."
+              bodyClassName="p-0"
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className={theadRow}>
+                      <th className="px-4 py-3 font-medium">Email</th>
+                      <th className="px-4 py-3 font-medium">Role</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loaded && users.length === 0 ? (
+                      <tr className={bodyRow}>
+                        <td
+                          colSpan={2}
+                          className="px-4 py-3 text-sm text-muted"
+                        >
+                          No users yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      users.map((u) => (
+                        <tr key={u.id} className={bodyRow}>
+                          <td className="px-4 py-3 text-fg">{u.email}</td>
+                          <td className="px-4 py-3">
+                            <RoleBadge role={u.role} />
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <form
+                onSubmit={addUser}
+                className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3"
+              >
+                <div className="min-w-52 flex-1">
+                  <Input
+                    type="email"
+                    placeholder="email@company.com"
+                    aria-label="New user email"
+                    value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="w-44">
+                  <Input
+                    type="password"
+                    placeholder="Initial password"
+                    aria-label="Initial password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    minLength={10}
+                    required
+                  />
+                </div>
+                {roleSelect(newRole, setNewRole, "New user role")}
+                <Button type="submit" size="sm" disabled={busy}>
+                  Add user
+                </Button>
+              </form>
+            </Panel>
 
-          <Section
-            title="API keys"
-            note="Machine credentials for CI importers and integrations. Sent via the x-api-key header."
-          >
-            {createdKey && (
-              <p className="mb-3 break-all rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 font-mono text-xs text-fg">
-                New key (copy now — it is shown only once):{" "}
-                <b className="select-all">{createdKey}</b>
-              </p>
-            )}
-            <table className="w-full text-sm">
-              <tbody>
-                {keys.map((k) => (
-                  <tr key={k.id} className="border-t border-line">
-                    <td className="py-2.5 text-fg">{k.name}</td>
-                    <td className="py-2.5 capitalize text-muted">{k.role}</td>
-                    <td className="py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => void revokeKey(k.id)}
-                        className="text-sm text-crit transition-colors hover:underline"
-                      >
-                        Revoke
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <form onSubmit={addKey} className="mt-4 flex flex-wrap gap-2">
-              <input
-                className={`${field} min-w-52 flex-1`}
-                placeholder="Key name (e.g. ci-importer)"
-                value={newKeyName}
-                onChange={(e) => setNewKeyName(e.target.value)}
-                required
-              />
-              {roleSelect(newKeyRole, setNewKeyRole)}
-              <button type="submit" disabled={busy} className={primaryBtn}>
-                Create key
-              </button>
-            </form>
-          </Section>
-        </>
-      )}
+            <Panel
+              title="API keys"
+              description="Machine credentials for CI importers and integrations. Sent via the x-api-key header."
+              bodyClassName="p-0"
+            >
+              {createdKey && (
+                <div className="border-b border-line bg-accent-soft px-4 py-3">
+                  <p className="text-xs font-medium text-accent">
+                    New key — copy now, it is shown only once:
+                  </p>
+                  <p className="mt-1 select-all break-all font-mono text-xs text-fg">
+                    {createdKey}
+                  </p>
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className={theadRow}>
+                      <th className="px-4 py-3 font-medium">Name</th>
+                      <th className="px-4 py-3 font-medium">Role</th>
+                      <th className="px-4 py-3 font-medium">
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loaded && keys.length === 0 ? (
+                      <tr className={bodyRow}>
+                        <td
+                          colSpan={3}
+                          className="px-4 py-3 text-sm text-muted"
+                        >
+                          No API keys yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      keys.map((k) => (
+                        <tr key={k.id} className={bodyRow}>
+                          <td className="px-4 py-3 text-fg">{k.name}</td>
+                          <td className="px-4 py-3">
+                            <RoleBadge role={k.role} />
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              onClick={() => void revokeKey(k.id)}
+                            >
+                              Revoke
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <form
+                onSubmit={addKey}
+                className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3"
+              >
+                <div className="min-w-52 flex-1">
+                  <Input
+                    placeholder="Key name (e.g. ci-importer)"
+                    aria-label="Key name"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    required
+                  />
+                </div>
+                {roleSelect(newKeyRole, setNewKeyRole, "New key role")}
+                <Button type="submit" size="sm" disabled={busy}>
+                  Create key
+                </Button>
+              </form>
+            </Panel>
+          </>
+        )}
+      </div>
     </div>
   );
 }
