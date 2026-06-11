@@ -32,8 +32,9 @@ crates/
   argus-vuln         # CVE correlation, live NVD/EPSS/KEV intel   [P1/P3]
   argus-intel        # device classification                      [P1]
   argus-report       # exposure / posture reports                 [P3]
+  argus-policy       # advisory segmentation rules                [P3]
   argus-api          # axum HTTP, Postgres, auth, multi-tenant    [P0..P3]
-  ...                # sensor, behavior, policy, connectors       [P2/P3]
+  ...                # sensor, behavior, connectors               [P2/P3]
 web/                 # Next.js console                            [P0/P1]
 ```
 
