@@ -206,7 +206,7 @@ fn cors_layer() -> CorsLayer {
     }
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(list))
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
@@ -231,7 +231,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/api-keys/{id}", delete(account::delete_api_key))
         .route("/api/assets", get(list_assets))
-        .route("/api/assets/{id}", get(get_asset))
+        .route("/api/assets/{id}", get(get_asset).patch(update_asset))
         .route("/api/summary", get(summary))
         .route("/api/vulns", get(vulns::list_vulns))
         .route("/api/findings", post(findings::set_finding))
@@ -300,6 +300,88 @@ async fn get_asset(
         .find(|a| a.asset.id.to_string() == id)
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "asset not found".to_owned()))
+}
+
+#[derive(Deserialize)]
+struct UpdateAssetRequest {
+    /// New criticality override; absent = unchanged.
+    criticality: Option<argus_core::Criticality>,
+    /// New exposure override; absent = unchanged.
+    exposure: Option<argus_core::Exposure>,
+}
+
+/// `PATCH /api/assets/{id}` — set analyst business context (criticality /
+/// exposure overrides) and recompute the risk score. Requires the `analyst`
+/// role.
+///
+/// Overrides are human decisions layered over what discovery re-derives each
+/// scan, so they persist across re-scans (see `monitor::carry_forward`). A
+/// risk-band transition caused by the update lands in the change-event feed
+/// like any scan-detected one.
+async fn update_asset(
+    auth: AuthContext,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateAssetRequest>,
+) -> Result<Json<ScoredAsset>, (StatusCode, String)> {
+    auth.require(Role::Analyst)?;
+    if req.criticality.is_none() && req.exposure.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "nothing to update — set criticality and/or exposure".to_owned(),
+        ));
+    }
+
+    // Serialize against concurrent scans: a scan that loaded the asset before
+    // this commit must not advance the diff baseline over the override.
+    let _guard = state.ingest_locks.lock(auth.tenant_id).await;
+    let assets = state
+        .store
+        .load_all(auth.tenant_id)
+        .await
+        .map_err(store_error)?;
+    let Some(prev) = assets.into_iter().find(|a| a.asset.id.to_string() == id) else {
+        return Err((StatusCode::NOT_FOUND, "asset not found".to_owned()));
+    };
+
+    let mut updated = prev.clone();
+    if let Some(criticality) = req.criticality {
+        updated.overrides.criticality = Some(criticality);
+    }
+    if let Some(exposure) = req.exposure {
+        updated.overrides.exposure = Some(exposure);
+    }
+    updated.overrides.apply(&mut updated.asset);
+    updated.risk = argus_core::RiskScore::compute(&argus_vuln::risk_inputs(
+        &updated.vulnerabilities,
+        updated.asset.exposure,
+        updated.asset.criticality,
+    ));
+
+    let events = monitor::diff(Some(&prev), &updated);
+    let event_refs: Vec<(&str, &serde_json::Value)> =
+        events.iter().map(|e| (e.kind, &e.detail)).collect();
+    let dedup_key = updated.asset.dedup_key();
+    let name = monitor::asset_name(&updated);
+    state
+        .store
+        .commit_asset(auth.tenant_id, &updated, &event_refs, &dedup_key, &name)
+        .await
+        .map_err(store_error)?;
+    state
+        .store
+        .audit(
+            auth.tenant_id,
+            auth.user_id,
+            "asset.update",
+            serde_json::json!({
+                "asset_id": id,
+                "criticality": req.criticality,
+                "exposure": req.exposure,
+            }),
+        )
+        .await;
+    Ok(Json(updated))
 }
 
 async fn summary(
@@ -810,6 +892,7 @@ mod tests {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
             },
+            overrides: crate::seed::AssetOverrides::default(),
         }
     }
 

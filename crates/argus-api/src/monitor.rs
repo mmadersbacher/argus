@@ -143,6 +143,10 @@ pub fn carry_forward(old: &ScoredAsset, new: &mut ScoredAsset) {
     new.asset.id = old.asset.id;
     new.asset.first_seen = old.asset.first_seen;
     new.asset.last_seen = OffsetDateTime::now_utc();
+    // Business context is an analyst decision, not a discovery output:
+    // overrides survive the re-scan and win over the re-derived values.
+    new.overrides = old.overrides;
+    new.overrides.apply(&mut new.asset);
 }
 
 /// Human-readable asset label for the event feed: hostname of the first
@@ -359,6 +363,7 @@ mod tests {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
             },
+            overrides: crate::seed::AssetOverrides::default(),
         }
     }
 
@@ -460,6 +465,19 @@ mod tests {
         assert_eq!(new.asset.id, old_id);
         assert_eq!(new.asset.first_seen, OffsetDateTime::UNIX_EPOCH);
         assert!(new.asset.last_seen > OffsetDateTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn carry_forward_reapplies_business_overrides() {
+        let mut old = scored(&[], &[], 10.0);
+        old.overrides.criticality = Some(Criticality::Critical);
+        old.overrides.exposure = Some(Exposure::InternetFacing);
+        // The rescan re-derived Medium/Internal; the override must win.
+        let mut new = scored(&[], &[], 10.0);
+        carry_forward(&old, &mut new);
+        assert_eq!(new.overrides, old.overrides);
+        assert_eq!(new.asset.criticality, Criticality::Critical);
+        assert_eq!(new.asset.exposure, Exposure::InternetFacing);
     }
 
     #[test]

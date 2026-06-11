@@ -44,7 +44,7 @@ function bandRank(band: RiskBand): number {
 }
 
 export function RiskView() {
-  const { summary, assets, error, loading } = useInventory();
+  const { summary, assets, error, loading, reload } = useInventory();
   const { events, error: eventsError } = useEvents(100);
   // Drawer selection by id, never by object: the asset is re-derived from the
   // latest poll data, so the drawer always shows fresh values.
@@ -296,7 +296,7 @@ export function RiskView() {
         )}
       </Panel>
 
-      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} />
+      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} onUpdated={reload} />
     </div>
   );
 }

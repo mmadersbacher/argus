@@ -26,6 +26,37 @@ pub struct ScoredAsset {
     pub vulnerabilities: Vec<Vulnerability>,
     /// Composite exposure/risk score.
     pub risk: RiskScore,
+    /// Analyst-set business context (absent on pre-override stored assets).
+    #[serde(default)]
+    pub overrides: AssetOverrides,
+}
+
+/// Analyst-set business-context overrides.
+///
+/// Discovery re-derives criticality and exposure on every scan; an override
+/// is a human decision, so it wins over the re-derived values and survives
+/// re-scans (carried forward with the asset identity in
+/// `monitor::carry_forward`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetOverrides {
+    /// Criticality set by an analyst, if any.
+    #[serde(default)]
+    pub criticality: Option<Criticality>,
+    /// Exposure set by an analyst, if any.
+    #[serde(default)]
+    pub exposure: Option<Exposure>,
+}
+
+impl AssetOverrides {
+    /// Overwrite an asset's effective fields with the overridden values.
+    pub fn apply(self, asset: &mut Asset) {
+        if let Some(criticality) = self.criticality {
+            asset.criticality = criticality;
+        }
+        if let Some(exposure) = self.exposure {
+            asset.exposure = exposure;
+        }
+    }
 }
 
 /// Aggregate numbers for the dashboard.
@@ -94,6 +125,7 @@ pub fn scored_from_discovered(host: DiscoveredHost) -> ScoredAsset {
         services: host.services,
         vulnerabilities,
         risk,
+        overrides: AssetOverrides::default(),
     }
 }
 
@@ -307,6 +339,7 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                 services,
                 vulnerabilities,
                 risk,
+                overrides: AssetOverrides::default(),
             }
         })
         .collect()

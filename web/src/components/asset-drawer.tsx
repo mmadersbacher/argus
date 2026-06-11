@@ -1,19 +1,134 @@
 "use client";
 
-// Slide-over detail view for a single asset. Props are frozen by the design
-// contract ({ asset, onClose }) — this component is imported across pages.
-// The modal shell (backdrop, Escape, focus trap/restore, scroll lock) lives
-// in the shared Drawer primitive; this file only renders the asset content.
+// Slide-over detail view for a single asset. The base props are frozen by
+// the design contract ({ asset, onClose }; onUpdated is optional) — this
+// component is imported across pages. The modal shell (backdrop, Escape,
+// focus trap/restore, scroll lock) lives in the shared Drawer primitive;
+// this file only renders the asset content.
 
-import type { ScoredAsset } from "@/lib/api";
+import { useState } from "react";
+import {
+  updateAsset,
+  type Criticality,
+  type Exposure,
+  type ScoredAsset,
+} from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import {
   assetTypeLabel,
   exposureLabel,
   formatCvss,
   formatEpss,
 } from "@/lib/ui";
-import { Badge, Drawer } from "@/components/ui";
+import { Badge, Drawer, Select } from "@/components/ui";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
+
+const CRITICALITIES: Criticality[] = ["low", "medium", "high", "critical"];
+const EXPOSURES: Exposure[] = ["internal", "internet_facing", "unknown"];
+
+const criticalityLabel: Record<Criticality, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  critical: "Critical",
+};
+
+/** Business-context editor: criticality/exposure overrides + risk recompute.
+ *  Mount with a key per asset id so select state follows the selection.
+ *  Overrides are analyst decisions — they win over discovery and survive
+ *  re-scans; the risk score updates immediately. */
+function BusinessContext({
+  asset,
+  onUpdated,
+}: {
+  asset: ScoredAsset;
+  onUpdated?: () => void | Promise<void>;
+}) {
+  const { session } = useAuth();
+  const canEdit = session?.role === "analyst" || session?.role === "admin";
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (body: {
+    criticality?: Criticality;
+    exposure?: Exposure;
+  }) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateAsset(asset.id, body);
+      await onUpdated?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canEdit) {
+    return (
+      <div className="grid grid-cols-2 gap-4">
+        <Detail
+          label="Criticality"
+          value={criticalityLabel[asset.criticality]}
+        />
+        <Detail label="Exposure" value={exposureLabel[asset.exposure]} />
+      </div>
+    );
+  }
+
+  return (
+    <section>
+      <Overline>Business context</Overline>
+      <div className="mt-2 grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            Criticality
+            {asset.overrides.criticality ? " · set by analyst" : ""}
+          </span>
+          <Select
+            value={asset.criticality}
+            disabled={saving}
+            onChange={(e) =>
+              void save({ criticality: e.target.value as Criticality })
+            }
+            className="h-8 text-xs"
+          >
+            {CRITICALITIES.map((c) => (
+              <option key={c} value={c}>
+                {criticalityLabel[c]}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            Exposure
+            {asset.overrides.exposure ? " · set by analyst" : ""}
+          </span>
+          <Select
+            value={asset.exposure}
+            disabled={saving}
+            onChange={(e) =>
+              void save({ exposure: e.target.value as Exposure })
+            }
+            className="h-8 text-xs"
+          >
+            {EXPOSURES.map((x) => (
+              <option key={x} value={x}>
+                {exposureLabel[x]}
+              </option>
+            ))}
+          </Select>
+        </label>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted">
+        Drives the risk score; survives re-scans.
+      </p>
+      {error ? <p className="mt-1 text-xs text-crit">{error}</p> : null}
+    </section>
+  );
+}
 
 function dash(value: string | null | undefined): string {
   return value && value.length > 0 ? value : "—";
@@ -57,9 +172,12 @@ function Detail({
 export function AssetDrawer({
   asset,
   onClose,
+  onUpdated,
 }: {
   asset: ScoredAsset | null;
   onClose: () => void;
+  /** Called after a business-context save so the host view can refresh. */
+  onUpdated?: () => void | Promise<void>;
 }) {
   if (!asset) return null;
   const iface = asset.interfaces[0];
@@ -96,6 +214,8 @@ export function AssetDrawer({
         <Detail label="Hostname" value={dash(iface?.hostname)} mono />
         <Detail label="Confidence" value={`${fp.confidence}%`} />
       </div>
+
+      <BusinessContext key={asset.id} asset={asset} onUpdated={onUpdated} />
 
       <section>
         <Overline>

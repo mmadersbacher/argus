@@ -62,6 +62,13 @@ export interface Vulnerability {
   severity: Severity;
 }
 
+/** Analyst-set business context; overrides win over discovery and survive
+ *  re-scans. `criticality`/`exposure` on the asset are the effective values. */
+export interface AssetOverrides {
+  criticality: Criticality | null;
+  exposure: Exposure | null;
+}
+
 export interface ScoredAsset {
   id: string;
   asset_type: AssetType;
@@ -74,6 +81,7 @@ export interface ScoredAsset {
   first_seen: string;
   last_seen: string;
   risk: RiskScore;
+  overrides: AssetOverrides;
 }
 
 export interface Summary {
@@ -205,6 +213,18 @@ export type { Role, Session };
 
 export const getSummary = () => fetchJSON<Summary>("/api/summary");
 export const getAssets = () => fetchJSON<ScoredAsset[]>("/api/assets");
+
+/** Set business-context overrides (criticality/exposure) and recompute risk.
+ *  Requires analyst or higher; returns the updated asset. */
+export const updateAsset = (
+  id: string,
+  body: { criticality?: Criticality; exposure?: Exposure },
+) =>
+  fetchJSON<ScoredAsset>(`/api/assets/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
 /** `deep` is only sent when true so the request shape stays unchanged for
  *  existing single-argument callers. */

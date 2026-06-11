@@ -255,6 +255,7 @@ mod tests {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
             },
+            overrides: crate::seed::AssetOverrides::default(),
         }
     }
 

@@ -522,7 +522,7 @@ export function AssetsView() {
         </div>
       </Panel>
 
-      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} />
+      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} onUpdated={reload} />
     </div>
   );
 }

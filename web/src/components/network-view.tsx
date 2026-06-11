@@ -162,7 +162,7 @@ function HostCard({
 }
 
 export function NetworkView() {
-  const { assets, summary, error, loading } = useInventory();
+  const { assets, summary, error, loading, reload } = useInventory();
   // Drawer selection by id, never by object: the asset is re-derived from the
   // latest poll data, so the drawer always shows fresh values.
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -269,7 +269,7 @@ export function NetworkView() {
         </div>
       )}
 
-      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} />
+      <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} onUpdated={reload} />
     </div>
   );
 }
