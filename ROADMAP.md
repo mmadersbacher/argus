@@ -65,7 +65,16 @@ connectors, policy/reporting, billing) is multi-week.
       aggregation: severity/CVSS/EPSS maxima, KEV-first ordering, affected
       assets), Network (subnet-grouped host grid), Risk (distribution,
       top-10 assets, risk-change feed)
-- [ ] `argus-policy`: advisory segmentation
+- [x] `argus-policy`: advisory segmentation — pure rule evaluator over the
+      inventory (`argus_policy::evaluate`): KEV × internet-facing, exposed
+      management/database ports (criticality split mirrors the discovery
+      port taxonomy), internet-reachable ICS protocols, internet-facing
+      IoT/IoMT, OT/IT mixed /24 zones (Purdue rationale), clear-text legacy
+      protocols, high-value assets in IoT-noisy zones, flat-network
+      heuristic. Served as `GET /api/policy` (sorted critical-first) and
+      rendered as advisory cards (rationale + recommendation + affected
+      evidence) on the console's Segmentation page. Zones are IPv4-/24
+      approximations until switch/VLAN telemetry exists (connectors).
 - [x] `argus-report`: exposure / posture reports — pure, IO-free report
       builder (`argus_report::build`: executive-summary highlights, inventory
       breakdowns, risk distribution + top-10 assets, CVE posture with

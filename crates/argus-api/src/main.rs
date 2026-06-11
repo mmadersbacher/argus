@@ -28,6 +28,7 @@ mod account;
 mod auth;
 mod db;
 mod monitor;
+mod policy;
 mod report;
 mod seed;
 mod store;
@@ -233,6 +234,7 @@ fn router(state: AppState) -> Router {
         .route("/api/summary", get(summary))
         .route("/api/vulns", get(vulns::list_vulns))
         .route("/api/report", get(report::get_report))
+        .route("/api/policy", get(policy::get_policy))
         .route("/api/events", get(monitor::list_events))
         .route(
             "/api/monitor",

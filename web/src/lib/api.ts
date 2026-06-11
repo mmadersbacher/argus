@@ -430,3 +430,26 @@ export interface ExposureReport {
 /** The API clamps days to 1..=90 (event retention window). */
 export const fetchReport = (days = 30) =>
   fetchJSON<ExposureReport>(`/api/report?days=${days}`);
+
+// ---- policy / segmentation ---------------------------------------------------
+
+export type AdvisoryLevel = "critical" | "high" | "medium" | "low";
+
+export interface AffectedAsset {
+  name: string;
+  /** Rule-specific evidence (exposed ports, subnet, ...). */
+  evidence: string;
+}
+
+/** One segmentation / exposure finding from GET /api/policy (sorted
+ *  critical-first by the API). */
+export interface Advisory {
+  rule: string;
+  level: AdvisoryLevel;
+  title: string;
+  rationale: string;
+  recommendation: string;
+  affected: AffectedAsset[];
+}
+
+export const fetchPolicy = () => fetchJSON<Advisory[]>("/api/policy");

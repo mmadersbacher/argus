@@ -35,6 +35,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Vulnerabilities", href: "/vulns", icon: "bug" },
       { label: "Risk", href: "/risk", icon: "gauge" },
+      { label: "Segmentation", href: "/policy", icon: "shield" },
       { label: "Reports", href: "/reports", icon: "file" },
     ],
   },
