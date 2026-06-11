@@ -27,12 +27,13 @@ source of truth. Full design: [`docs/superpowers/specs/2026-06-03-argus-platform
 
 ```
 crates/
-  argus-core         # domain model (this crate)
+  argus-core         # domain model + risk scoring
   argus-discovery    # active discovery (nmap/masscan/arp-scan)   [P1]
-  argus-vuln         # CVE correlation (NVD/EPSS/KEV)             [P1]
-  argus-risk         # exposure/risk scoring                      [P1]
-  argus-api          # axum HTTP/WS, Postgres, auth, multi-tenant [P0/P1]
-  ...                # sensor, intel, behavior, policy, connectors [P2/P3]
+  argus-vuln         # CVE correlation, live NVD/EPSS/KEV intel   [P1/P3]
+  argus-intel        # device classification                      [P1]
+  argus-report       # exposure / posture reports                 [P3]
+  argus-api          # axum HTTP, Postgres, auth, multi-tenant    [P0..P3]
+  ...                # sensor, behavior, policy, connectors       [P2/P3]
 web/                 # Next.js console                            [P0/P1]
 ```
 
