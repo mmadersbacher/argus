@@ -301,11 +301,28 @@ export const fetchMonitor = () => fetchJSON<MonitorConfig>("/api/monitor");
 
 // ---- vulnerabilities --------------------------------------------------------
 
+export type FindingStatus =
+  | "open"
+  | "acknowledged"
+  | "resolved"
+  | "false_positive";
+
+/** Analyst triage decision for one (asset, CVE) finding; absent = open.
+ *  Triage is metadata only — it does not alter the computed risk score. */
+export interface FindingState {
+  status: FindingStatus;
+  note: string;
+  updated_by: string;
+  /** RFC3339. */
+  updated_at: string;
+}
+
 export interface VulnAffectedAsset {
   id: string;
   name: string;
   risk: number;
   band: RiskBand;
+  finding: FindingState | null;
 }
 
 /** Vulnerability rollup across the inventory — one row per CVE. */
@@ -321,6 +338,20 @@ export interface VulnRow {
 export async function fetchVulns(): Promise<VulnRow[]> {
   return fetchJSON<VulnRow[]>("/api/vulns");
 }
+
+/** Set or clear ("open") the triage status of one finding. Requires analyst
+ *  or higher; returns the new state, or null when back to open. */
+export const setFinding = (
+  asset_id: string,
+  cve_id: string,
+  status: FindingStatus,
+  note?: string,
+) =>
+  fetchJSON<FindingState | null>("/api/findings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ asset_id, cve_id, status, note }),
+  });
 
 /** Requires analyst or higher; 400 carries the validation error as text. */
 export const saveMonitor = (cfg: MonitorSettings) =>

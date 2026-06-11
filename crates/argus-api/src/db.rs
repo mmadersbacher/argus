@@ -538,3 +538,102 @@ pub async fn claim_due_monitors(pool: &PgPool) -> Result<Vec<DueMonitor>, sqlx::
         })
         .collect())
 }
+
+// ---------------------------------------------------------------------------
+// Finding triage (IR workflow)
+// ---------------------------------------------------------------------------
+
+/// One triage decision: the analyst-set status of a (asset, CVE) finding.
+/// Findings without a row are open.
+#[derive(Debug, Clone, Serialize)]
+pub struct FindingStatusRow {
+    /// Asset the finding belongs to.
+    pub asset_id: Uuid,
+    /// CVE identifier.
+    pub cve_id: String,
+    /// `acknowledged`, `resolved` or `false_positive`.
+    pub status: String,
+    /// Free-text analyst note (may be empty).
+    pub note: String,
+    /// Who set the status (login email, or `api-key`).
+    pub updated_by: String,
+    /// When the status was last set.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+/// Every triage decision of a tenant.
+pub async fn list_finding_statuses(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> Result<Vec<FindingStatusRow>, sqlx::Error> {
+    let rows: Vec<(Uuid, String, String, String, String, OffsetDateTime)> = sqlx::query_as(
+        "SELECT asset_id, cve_id, status, note, updated_by, updated_at
+         FROM finding_status WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(asset_id, cve_id, status, note, updated_by, updated_at)| FindingStatusRow {
+                asset_id,
+                cve_id,
+                status,
+                note,
+                updated_by,
+                updated_at,
+            },
+        )
+        .collect())
+}
+
+/// Create or replace one triage decision.
+pub async fn set_finding_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    asset_id: Uuid,
+    cve_id: &str,
+    status: &str,
+    note: &str,
+    updated_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO finding_status (tenant_id, asset_id, cve_id, status, note, updated_by, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())
+         ON CONFLICT (tenant_id, asset_id, cve_id)
+         DO UPDATE SET status = EXCLUDED.status,
+                       note = EXCLUDED.note,
+                       updated_by = EXCLUDED.updated_by,
+                       updated_at = now()",
+    )
+    .bind(tenant_id)
+    .bind(asset_id)
+    .bind(cve_id)
+    .bind(status)
+    .bind(note)
+    .bind(updated_by)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Remove a triage decision (the finding reverts to open). Returns whether a
+/// row existed.
+pub async fn clear_finding_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    asset_id: Uuid,
+    cve_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM finding_status WHERE tenant_id = $1 AND asset_id = $2 AND cve_id = $3",
+    )
+    .bind(tenant_id)
+    .bind(asset_id)
+    .bind(cve_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}

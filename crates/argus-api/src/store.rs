@@ -589,6 +589,77 @@ impl Store {
             }
         }
     }
+
+    // ---- finding triage -----------------------------------------------------
+
+    /// Every triage decision of a tenant (findings without one are open).
+    pub async fn list_finding_statuses(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<db::FindingStatusRow>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::list_finding_statuses(pool, tenant_id).await?),
+            Self::Memory(m) => Ok(m
+                .lock()
+                .findings
+                .iter()
+                .filter(|((t, _, _), _)| *t == tenant_id)
+                .map(|(_, row)| row.clone())
+                .collect()),
+        }
+    }
+
+    /// Create or replace one triage decision.
+    pub async fn set_finding_status(
+        &self,
+        tenant_id: Uuid,
+        asset_id: Uuid,
+        cve_id: &str,
+        status: &str,
+        note: &str,
+        updated_by: &str,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::set_finding_status(
+                pool, tenant_id, asset_id, cve_id, status, note, updated_by,
+            )
+            .await?),
+            Self::Memory(m) => {
+                m.lock().findings.insert(
+                    (tenant_id, asset_id, cve_id.to_owned()),
+                    db::FindingStatusRow {
+                        asset_id,
+                        cve_id: cve_id.to_owned(),
+                        status: status.to_owned(),
+                        note: note.to_owned(),
+                        updated_by: updated_by.to_owned(),
+                        updated_at: OffsetDateTime::now_utc(),
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove a triage decision (the finding reverts to open). Returns
+    /// whether one existed.
+    pub async fn clear_finding_status(
+        &self,
+        tenant_id: Uuid,
+        asset_id: Uuid,
+        cve_id: &str,
+    ) -> Result<bool, StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                Ok(db::clear_finding_status(pool, tenant_id, asset_id, cve_id).await?)
+            }
+            Self::Memory(m) => Ok(m
+                .lock()
+                .findings
+                .remove(&(tenant_id, asset_id, cve_id.to_owned()))
+                .is_some()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +695,9 @@ struct MemInner {
     next_event_id: i64,
     /// One monitor per tenant, like the `monitors` table's tenant_id PK.
     monitors: HashMap<Uuid, MemMonitor>,
+    /// Triage decisions keyed like the `finding_status` PK
+    /// (`tenant_id, asset_id, cve_id`).
+    findings: HashMap<(Uuid, Uuid, String), db::FindingStatusRow>,
 }
 
 impl MemInner {

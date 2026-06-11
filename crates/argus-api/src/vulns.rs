@@ -3,15 +3,17 @@
 //! of affected assets.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use argus_core::{AssetId, RiskBand, Severity};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Serialize;
+use time::OffsetDateTime;
 
 use crate::auth::AuthContext;
+use crate::db::FindingStatusRow;
 use crate::seed::ScoredAsset;
 use crate::{monitor, store_error, AppState};
 
@@ -44,6 +46,23 @@ pub struct AffectedAsset {
     pub risk: f32,
     /// Qualitative risk band.
     pub band: RiskBand,
+    /// Analyst triage decision for this (asset, CVE) finding; `None` = open.
+    pub finding: Option<FindingState>,
+}
+
+/// The triage state of one (asset, CVE) finding as embedded in the
+/// vulnerability rollup.
+#[derive(Debug, Clone, Serialize)]
+pub struct FindingState {
+    /// `acknowledged`, `resolved` or `false_positive`.
+    pub status: String,
+    /// Free-text analyst note (may be empty).
+    pub note: String,
+    /// Who set the status (login email, or `api-key`).
+    pub updated_by: String,
+    /// When the status was last set.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 /// `GET /api/vulns` — every CVE across the tenant's inventory, aggregated by
@@ -57,19 +76,29 @@ pub async fn list_vulns(
         .load_all(auth.tenant_id)
         .await
         .map_err(store_error)?;
-    Ok(Json(aggregate(&assets)))
+    let statuses = state
+        .store
+        .list_finding_statuses(auth.tenant_id)
+        .await
+        .map_err(store_error)?;
+    Ok(Json(aggregate(&assets, &statuses)))
 }
 
 /// Collapse per-asset vulnerability lists into one entry per CVE.
 ///
 /// Per CVE: `severity` is the maximum over all instances, `cvss`/`epss` the
 /// maximum of the values that are present, and `kev` the OR. `affected` lists
-/// each asset carrying the CVE, highest risk first. Entries are sorted KEV
+/// each asset carrying the CVE, highest risk first, each with its analyst
+/// triage state from `statuses` (absent = open). Entries are sorted KEV
 /// first, then by CVSS descending (unknown scores last), then by CVE id
 /// descending in numeric `(year, number)` order (ids that do not parse as
 /// `CVE-YYYY-NNNNN` sort last, lexicographically).
 #[must_use]
-pub fn aggregate(assets: &[ScoredAsset]) -> Vec<VulnEntry> {
+pub fn aggregate(assets: &[ScoredAsset], statuses: &[FindingStatusRow]) -> Vec<VulnEntry> {
+    let by_finding: HashMap<(uuid::Uuid, &str), &FindingStatusRow> = statuses
+        .iter()
+        .map(|s| ((s.asset_id, s.cve_id.as_str()), s))
+        .collect();
     let mut by_cve: BTreeMap<&str, (VulnEntry, HashSet<AssetId>)> = BTreeMap::new();
     for asset in assets {
         let name = monitor::asset_name(asset);
@@ -94,11 +123,20 @@ pub fn aggregate(assets: &[ScoredAsset]) -> Vec<VulnEntry> {
             // An asset normally lists a CVE once; guard against duplicates so
             // a repeated instance cannot produce a second affected row.
             if seen.insert(asset.asset.id) {
+                let finding = by_finding
+                    .get(&(asset.asset.id.0, vuln.cve_id.as_str()))
+                    .map(|s| FindingState {
+                        status: s.status.clone(),
+                        note: s.note.clone(),
+                        updated_by: s.updated_by.clone(),
+                        updated_at: s.updated_at,
+                    });
                 entry.affected.push(AffectedAsset {
                     id: asset.asset.id,
                     name: name.clone(),
                     risk: asset.risk.value,
                     band: asset.risk.band,
+                    finding,
                 });
             }
         }
@@ -244,7 +282,7 @@ mod tests {
                 false,
             )],
         );
-        let entries = aggregate(&[web, db]);
+        let entries = aggregate(&[web, db], &[]);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.cve_id, "CVE-2024-1234");
@@ -270,7 +308,7 @@ mod tests {
                 vuln("CVE-2024-4", Severity::High, Some(9.8), None, false),
             ],
         );
-        let entries = aggregate(std::slice::from_ref(&a));
+        let entries = aggregate(std::slice::from_ref(&a), &[]);
         let ids: Vec<&str> = entries.iter().map(|e| e.cve_id.as_str()).collect();
         assert_eq!(
             ids,
@@ -290,7 +328,7 @@ mod tests {
                 vuln("CVE-2024-10000", Severity::High, Some(9.8), None, false),
             ],
         );
-        let entries = aggregate(std::slice::from_ref(&a));
+        let entries = aggregate(std::slice::from_ref(&a), &[]);
         let ids: Vec<&str> = entries.iter().map(|e| e.cve_id.as_str()).collect();
         assert_eq!(ids, ["CVE-2024-10000", "CVE-2024-9999"]);
     }
@@ -307,7 +345,7 @@ mod tests {
                 vuln("CVE-2020-1", Severity::High, Some(9.8), None, false),
             ],
         );
-        let entries = aggregate(std::slice::from_ref(&a));
+        let entries = aggregate(std::slice::from_ref(&a), &[]);
         let ids: Vec<&str> = entries.iter().map(|e| e.cve_id.as_str()).collect();
         assert_eq!(ids, ["CVE-2020-1", "CVE-2024-ABCD"]);
     }
@@ -318,7 +356,7 @@ mod tests {
         let low = asset("low-01", 12.0, shared(Severity::High));
         let high = asset("high-01", 91.0, shared(Severity::High));
         let mid = asset("mid-01", 55.5, shared(Severity::High));
-        let entries = aggregate(&[low, high, mid]);
+        let entries = aggregate(&[low, high, mid], &[]);
         assert_eq!(entries.len(), 1);
         let names: Vec<&str> = entries[0]
             .affected
@@ -344,7 +382,8 @@ mod tests {
             )],
         );
         let id = a.asset.id.to_string();
-        let json = serde_json::to_value(aggregate(std::slice::from_ref(&a))).expect("serialize");
+        let json =
+            serde_json::to_value(aggregate(std::slice::from_ref(&a), &[])).expect("serialize");
         assert_eq!(json[0]["cve_id"], "CVE-2024-1234");
         assert_eq!(json[0]["severity"], "critical");
         assert!((json[0]["cvss"].as_f64().unwrap() - 9.8).abs() < 1e-6);

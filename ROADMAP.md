@@ -84,7 +84,16 @@ connectors, policy/reporting, billing) is multi-week.
       print-to-PDF, `@media print` isolates the report sheet). Remaining:
       scheduled report delivery (e-mail/webhook), per-framework compliance
       mappings.
-- [ ] IR workflows, billing fields
+- [x] IR workflow v1 — finding triage: analyst-set lifecycle status per
+      (asset, CVE) finding (`acknowledged` / `resolved` / `false_positive`
+      + note, `open` = default), keyed by the stable asset id so decisions
+      survive re-scans. New `finding_status` table (+ in-memory twin),
+      `POST /api/findings` (analyst role, validates the finding exists,
+      audited), status embedded per affected asset in `GET /api/vulns`, and
+      triage controls in the CVE drawer (status select + note, viewer sees
+      read-only state). Deliberate v1 semantics: triage is metadata only —
+      it does not alter the computed risk score. Remaining: billing fields,
+      bulk triage, "resolved but still detected" surfacing.
 - [x] `argus-vuln` live NVD + EPSS + CISA-KEV intelligence: nmap application
       CPEs captured per service (`Service.cpe`), NVD queried by
       `virtualMatchString` per vendor:product and matched locally against the

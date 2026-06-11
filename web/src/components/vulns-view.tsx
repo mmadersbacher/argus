@@ -5,9 +5,15 @@
 // filters preserve that order, we never re-sort.
 
 import { useEffect, useMemo, useState } from "react";
-import type { Severity } from "@/lib/api";
+import {
+  setFinding,
+  type FindingState,
+  type FindingStatus,
+  type Severity,
+} from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { useVulns } from "@/lib/use-vulns";
-import { formatCvss, formatEpss } from "@/lib/ui";
+import { formatCvss, formatEpss, timeAgo } from "@/lib/ui";
 import {
   Badge,
   Drawer,
@@ -24,6 +30,119 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 
 const nvdUrl = (cveId: string) => `https://nvd.nist.gov/vuln/detail/${cveId}`;
 
+const statusLabel: Record<FindingStatus, string> = {
+  open: "Open",
+  acknowledged: "Acknowledged",
+  resolved: "Resolved",
+  false_positive: "False positive",
+};
+
+const statusTone: Record<FindingStatus, "neutral" | "warn" | "ok" | "info"> = {
+  open: "neutral",
+  acknowledged: "warn",
+  resolved: "ok",
+  false_positive: "info",
+};
+
+const STATUS_OPTIONS: FindingStatus[] = [
+  "open",
+  "acknowledged",
+  "resolved",
+  "false_positive",
+];
+
+/** Triage controls for one (asset, CVE) finding inside the drawer.
+ *  Mount with a key per asset+CVE so local note state resets on switch.
+ *  Status saves immediately on select; the note saves on blur. Triage is
+ *  metadata only — the risk score deliberately stays unchanged. */
+function FindingTriage({
+  assetId,
+  cveId,
+  finding,
+  canEdit,
+  onChanged,
+}: {
+  assetId: string;
+  cveId: string;
+  finding: FindingState | null;
+  canEdit: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [note, setNote] = useState(finding?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const status = finding?.status ?? "open";
+
+  const save = async (next: FindingStatus, nextNote: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await setFinding(assetId, cveId, next, nextNote.trim() || undefined);
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canEdit) {
+    if (!finding) return null;
+    return (
+      <div className="mt-1.5 space-y-1">
+        <Badge tone={statusTone[finding.status]}>
+          {statusLabel[finding.status]}
+        </Badge>
+        {finding.note ? (
+          <p className="text-xs text-fg-2">{finding.note}</p>
+        ) : null}
+        <p className="text-[11px] text-muted">
+          by {finding.updated_by} · {timeAgo(finding.updated_at)}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <Select
+        value={status}
+        disabled={saving}
+        onChange={(e) => void save(e.target.value as FindingStatus, note)}
+        aria-label={`Triage status of ${cveId}`}
+        className="h-8 w-auto text-xs"
+      >
+        {STATUS_OPTIONS.map((s) => (
+          <option key={s} value={s}>
+            {statusLabel[s]}
+          </option>
+        ))}
+      </Select>
+      {finding ? (
+        <>
+          <Input
+            value={note}
+            disabled={saving}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => {
+              if (note.trim() !== finding.note) void save(status, note);
+            }}
+            placeholder="Add a note (optional)"
+            maxLength={500}
+            aria-label={`Triage note for ${cveId}`}
+            className="h-8 text-xs"
+          />
+          <p className="text-[11px] text-muted">
+            {statusLabel[finding.status]} by {finding.updated_by} ·{" "}
+            {timeAgo(finding.updated_at)}
+          </p>
+        </>
+      ) : null}
+      {error ? <p className="text-xs text-crit">{error}</p> : null}
+    </div>
+  );
+}
+
 // Anchor styled as a secondary button — external links cannot use <Button>.
 const linkButtonClasses =
   "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3.5 text-sm font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
@@ -31,7 +150,9 @@ const linkButtonClasses =
 // ---- page -------------------------------------------------------------------
 
 export function VulnsView() {
-  const { vulns, error } = useVulns();
+  const { vulns, error, reload } = useVulns();
+  const { session } = useAuth();
+  const canTriage = session?.role === "analyst" || session?.role === "admin";
   // Selection holds the id, never the object — the drawer re-derives the row
   // from the freshest poll data each render so it can never go stale.
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -285,14 +406,21 @@ export function VulnsView() {
             ) : (
               <ul className="mt-2 divide-y divide-line rounded-lg border border-line">
                 {selected.affected.map((a) => (
-                  <li
-                    key={a.id}
-                    className="flex items-center justify-between gap-3 px-3 py-2.5"
-                  >
-                    <span className="min-w-0 truncate text-sm font-medium text-fg">
-                      {a.name}
-                    </span>
-                    <RiskBadge band={a.band} value={a.risk} />
+                  <li key={a.id} className="px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-medium text-fg">
+                        {a.name}
+                      </span>
+                      <RiskBadge band={a.band} value={a.risk} />
+                    </div>
+                    <FindingTriage
+                      key={`${a.id}-${selected.cve_id}`}
+                      assetId={a.id}
+                      cveId={selected.cve_id}
+                      finding={a.finding}
+                      canEdit={canTriage}
+                      onChanged={reload}
+                    />
                   </li>
                 ))}
               </ul>
