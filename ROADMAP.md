@@ -14,9 +14,12 @@ feed in the console. **Console v2** landed on top: a professional redesign
 search) and the three remaining placeholder pages are now real —
 Vulnerabilities (backed by a new tenant-wide `GET /api/vulns` CVE
 aggregation), Network (subnet-grouped inventory) and Risk (distribution,
-top-risk assets, risk-change history). The remaining P2 / P3 work (passive
-sensing, trained classifier, connectors, policy/reporting, billing) is
-multi-week.
+top-risk assets, risk-change history). Vulnerability intelligence is now
+**live and CPE-grounded**: nmap CPEs are captured per service, NVD is queried
+per product and matched against its published version constraints, with
+KEV/EPSS overlays — all cached process-wide behind an NVD rate-limit gate
+(see P3). The remaining P2 / P3 work (passive sensing, trained classifier,
+connectors, policy/reporting, billing) is multi-week.
 
 ## P0 — Foundations ✅
 - [x] Repo + design spec
@@ -65,5 +68,16 @@ multi-week.
 - [ ] `argus-policy`: advisory segmentation
 - [ ] `argus-report`: compliance / exec reports
 - [ ] IR workflows, billing fields
-- [ ] `argus-vuln` live NVD + EPSS + CISA-KEV feed (replace the seed catalog)
+- [x] `argus-vuln` live NVD + EPSS + CISA-KEV intelligence: nmap application
+      CPEs captured per service (`Service.cpe`), NVD queried by
+      `virtualMatchString` per vendor:product and matched locally against the
+      version constraints NVD publishes in `configurations` (no more
+      version-blind keyword hits), all behind a process-wide TTL cache
+      (`intel::IntelCache`: KEV 12 h, EPSS 24 h, NVD 7 d) with an NVD
+      rate-limit gate (`NVD_API_KEY` lifts 5→50 req/30 s). The curated seed
+      catalog remains the offline baseline; CPE-less services correlate
+      against it only. Verified end-to-end against the live feeds
+      (OpenSSH 8.9p1 → 18 version-relevant CVEs incl. regreSSHion).
+      Remaining: NVD pagination beyond the first 2000 CVEs per product
+      (truncation is logged), cache persistence across restarts.
 - [ ] animation polish + performance pass

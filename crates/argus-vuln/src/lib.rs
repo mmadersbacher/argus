@@ -3,10 +3,11 @@
 //! Vulnerability correlation for Argus: match an asset's observed services to
 //! known CVEs (with real CVSS, EPSS and CISA-KEV signals) and derive the
 //! [`RiskInputs`] consumed by the core scoring engine. The bundled [`catalog`]
-//! is a curated seed set — the path to the full NVD/EPSS/KEV feeds is a drop-in
-//! `CveRecord` source away.
+//! is the curated offline baseline; [`intel::IntelCache`] layers live,
+//! CPE-grounded NVD/EPSS/KEV intelligence on top with per-feed caching.
 
 pub mod catalog;
+pub mod intel;
 pub mod nvd;
 pub mod version;
 

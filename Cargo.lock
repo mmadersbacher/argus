@@ -97,6 +97,8 @@ dependencies = [
  "argus-core",
  "reqwest",
  "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

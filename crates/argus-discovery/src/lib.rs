@@ -164,6 +164,7 @@ fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
             protocol: Protocol::Tcp,
             product: fingerprint::service_name(port).map(str::to_owned),
             banner: None,
+            cpe: None,
         })
         .collect();
 

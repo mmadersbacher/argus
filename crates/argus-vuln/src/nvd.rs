@@ -1,21 +1,24 @@
-//! Live vulnerability intelligence — NVD 2.0 search + CISA KEV + FIRST.org EPSS.
+//! Raw clients for the live vulnerability feeds — NVD 2.0, CISA KEV and
+//! FIRST.org EPSS.
 //!
-//! Best-effort enrichment layered on the offline [`crate::catalog`]: every call
-//! degrades gracefully to whatever it already has if a feed is slow, throttled
-//! or offline.
+//! Every fetcher is best-effort and side-effect free: `None` means the
+//! request or parse failed (distinct from a reachable-but-empty feed).
+//! Caching, rate-limit pacing and CPE-grounded matching live one layer up in
+//! [`crate::intel`].
 #![allow(clippy::cast_possible_truncation)] // CVSS scores: f64 JSON -> f32 domain type
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use argus_core::{Cvss, Epss, Severity, Vulnerability};
+use argus_core::Severity;
 
-const NVD_API: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
+/// NVD 2.0 CVE API endpoint.
+pub(crate) const NVD_API: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
 const KEV_FEED: &str =
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
 const EPSS_API: &str = "https://api.first.org/data/v1/epss";
 
-fn client() -> reqwest::Client {
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("argus-vuln/0.1")
@@ -82,48 +85,9 @@ pub async fn fetch_epss(cves: &[String]) -> HashMap<String, f32> {
     fetch_epss_checked(cves).await.unwrap_or_default()
 }
 
-/// NVD 2.0 keyword search for a product → vulnerabilities (bounded), or `None`
-/// if the NVD request / parse failed (distinct from a reachable-but-empty
-/// result). See [`search`] for the lossy wrapper.
-pub async fn search_checked(product: &str, limit: usize) -> Option<Vec<Vulnerability>> {
-    let lim = limit.to_string();
-    let json: serde_json::Value = client()
-        .get(NVD_API)
-        .query(&[("keywordSearch", product), ("resultsPerPage", lim.as_str())])
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
-    let out = json["vulnerabilities"]
-        .as_array()?
-        .iter()
-        .filter_map(|item| {
-            let cve = &item["cve"];
-            let id = cve["id"].as_str()?.to_owned();
-            let (score, severity) = extract_cvss(&cve["metrics"]);
-            Some(Vulnerability {
-                cve_id: id,
-                cvss: score.map(|s| Cvss {
-                    base_score: s,
-                    vector: None,
-                }),
-                epss: None,
-                kev: false,
-                severity,
-            })
-        })
-        .collect();
-    Some(out)
-}
-
-/// NVD 2.0 keyword search for a product → vulnerabilities (bounded, best-effort).
-pub async fn search(product: &str, limit: usize) -> Vec<Vulnerability> {
-    search_checked(product, limit).await.unwrap_or_default()
-}
-
-fn extract_cvss(metrics: &serde_json::Value) -> (Option<f32>, Severity) {
+/// Extract the best available CVSS base score (v3.1 > v3.0 > v2) and the
+/// derived severity from an NVD `metrics` object.
+pub(crate) fn extract_cvss(metrics: &serde_json::Value) -> (Option<f32>, Severity) {
     for key in ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"] {
         if let Some(entry) = metrics[key].as_array().and_then(|a| a.first()) {
             if let Some(score) = entry["cvssData"]["baseScore"].as_f64() {
@@ -133,79 +97,6 @@ fn extract_cvss(metrics: &serde_json::Value) -> (Option<f32>, Severity) {
         }
     }
     (None, Severity::None)
-}
-
-/// Result of a live enrichment pass: the (possibly enriched) vulns plus a
-/// reachability signal.
-#[derive(Debug, Clone)]
-pub struct Enrichment {
-    /// The catalog vulns overlaid with whatever live data was reachable.
-    pub vulns: Vec<Vulnerability>,
-    /// `true` only if *every* attempted live call succeeded. A single failed
-    /// feed (timeout / throttle / parse error) sets this to `false`, signalling
-    /// that `vulns` may be incomplete and must NOT be used as a change-detection
-    /// baseline (callers should keep the previous enriched set instead).
-    pub live: bool,
-}
-
-/// Enrich catalog vulns with NVD search hits for `products`, then overlay
-/// authoritative CISA-KEV flags and live EPSS scores, reporting whether the
-/// live feeds were fully reachable.
-///
-/// `live` is `true` only when EVERY attempted live call succeeded: every
-/// per-product NVD search returned `Some`, and (when the vuln set is non-empty)
-/// both the KEV and EPSS fetches returned `Some`. Any failure flips it to
-/// `false` so change detection can run on stable, non-regressive data instead
-/// of a partial result.
-pub async fn enrich_checked(mut vulns: Vec<Vulnerability>, products: &[String]) -> Enrichment {
-    let mut live = true;
-    for product in products {
-        // nmap product strings are verbose ("PostgreSQL DB 9.6.0 or later");
-        // NVD keyword search ANDs terms, so search the leading product token.
-        let keyword = product.split_whitespace().next().unwrap_or(product);
-        match search_checked(keyword, 5).await {
-            Some(found) => {
-                for vuln in found {
-                    if !vulns.iter().any(|v| v.cve_id == vuln.cve_id) {
-                        vulns.push(vuln);
-                    }
-                }
-            }
-            None => live = false,
-        }
-    }
-    if vulns.is_empty() {
-        return Enrichment { vulns, live };
-    }
-    let kev_checked = fetch_kev_checked().await;
-    live &= kev_checked.is_some();
-    let kev = kev_checked.unwrap_or_default();
-    let ids: Vec<String> = vulns.iter().map(|v| v.cve_id.clone()).collect();
-    let epss_checked = fetch_epss_checked(&ids).await;
-    live &= epss_checked.is_some();
-    let epss = epss_checked.unwrap_or_default();
-    for v in &mut vulns {
-        if !kev.is_empty() {
-            v.kev = kev.contains(&v.cve_id);
-        }
-        if let Some(&score) = epss.get(&v.cve_id) {
-            v.epss = Some(Epss {
-                score,
-                percentile: score,
-            });
-        }
-    }
-    Enrichment { vulns, live }
-}
-
-/// Best-effort enrichment wrapper that discards the reachability signal.
-///
-/// Enriches catalog vulns with NVD search hits for `products`, then overlays
-/// authoritative CISA-KEV flags and live EPSS scores; on any failure it returns
-/// whatever it already had. See [`enrich_checked`] for the variant that also
-/// reports feed reachability.
-pub async fn enrich(vulns: Vec<Vulnerability>, products: &[String]) -> Vec<Vulnerability> {
-    enrich_checked(vulns, products).await.vulns
 }
 
 #[cfg(test)]

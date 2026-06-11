@@ -35,6 +35,9 @@ services:
       # Self-service tenant signup (`true`/`false`) and demo seeding.
       ARGUS_SIGNUP_ENABLED: ${ARGUS_SIGNUP_ENABLED:-true}
       ARGUS_SEED_DEMO: ${ARGUS_SEED_DEMO:-true}
+      # Optional: lifts live NVD CVE lookups from 5 to 50 requests / 30 s
+      # (https://nvd.nist.gov/developers/request-an-api-key).
+      NVD_API_KEY: ${NVD_API_KEY:-}
     ports:
       - "8088:8088"
     depends_on:

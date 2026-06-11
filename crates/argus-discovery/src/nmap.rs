@@ -249,18 +249,31 @@ fn parse_ports(host: Node<'_, '_>) -> (Vec<Service>, Vec<u16>) {
             continue;
         };
         open_ports.push(portid);
-        let product = port
-            .children()
-            .find(|n| n.has_tag_name("service"))
-            .and_then(service_label);
+        let service = port.children().find(|n| n.has_tag_name("service"));
+        let product = service.and_then(service_label);
+        let cpe = service.and_then(service_cpe);
         services.push(Service {
             port: portid,
             protocol: Protocol::Tcp,
             product,
             banner: None,
+            cpe,
         });
     }
     (services, open_ports)
+}
+
+/// The service's application CPE (`cpe:/a:…`), if nmap reported one.
+///
+/// A `<service>` may carry several `<cpe>` children (application, OS,
+/// hardware); only the application entry identifies the vulnerable software,
+/// so the OS/hardware ones are skipped.
+fn service_cpe(svc: Node<'_, '_>) -> Option<String> {
+    svc.children()
+        .filter(|n| n.has_tag_name("cpe"))
+        .filter_map(|n| n.text())
+        .find(|t| t.starts_with("cpe:/a:") || t.starts_with("cpe:2.3:a:"))
+        .map(str::to_owned)
 }
 
 fn service_label(svc: Node<'_, '_>) -> Option<String> {
@@ -296,7 +309,10 @@ mod tests {
         <hostnames><hostname name="box.local"/></hostnames>
         <ports>
           <port protocol="tcp" portid="22"><state state="open"/>
-            <service name="ssh" product="OpenSSH" version="8.9p1"/></port>
+            <service name="ssh" product="OpenSSH" version="8.9p1">
+              <cpe>cpe:/o:linux:linux_kernel</cpe>
+              <cpe>cpe:/a:openbsd:openssh:8.9p1</cpe>
+            </service></port>
           <port protocol="tcp" portid="23"><state state="closed"/></port>
         </ports></host></nmaprun>"#;
 
@@ -310,10 +326,13 @@ mod tests {
         assert_eq!(iface.ip.unwrap().to_string(), "192.168.1.10");
         assert_eq!(iface.mac.unwrap().to_string(), "00:11:22:33:44:55");
         assert_eq!(h.asset.fingerprint.vendor.as_deref(), Some("Acme"));
-        assert!(h
+        let ssh = h
             .services
             .iter()
-            .any(|s| s.product.as_deref() == Some("OpenSSH 8.9p1")));
+            .find(|s| s.product.as_deref() == Some("OpenSSH 8.9p1"))
+            .expect("ssh service");
+        // The application CPE is captured; the OS CPE sibling is skipped.
+        assert_eq!(ssh.cpe.as_deref(), Some("cpe:/a:openbsd:openssh:8.9p1"));
     }
 
     #[test]

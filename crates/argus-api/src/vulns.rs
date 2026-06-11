@@ -393,6 +393,7 @@ mod tests {
             limiter: Arc::new(LoginLimiter::default()),
             signup_enabled: false,
             ingest_locks: IngestLocks::default(),
+            intel: argus_vuln::intel::IntelCache::new(None),
         };
         let auth = AuthContext {
             tenant_id: t1,

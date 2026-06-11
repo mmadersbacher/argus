@@ -283,6 +283,7 @@ pub fn seed_assets() -> Vec<ScoredAsset> {
                     protocol: Protocol::Tcp,
                     product: Some(product.to_owned()),
                     banner: None,
+                    cpe: None,
                 })
                 .collect();
             let asset = Asset {
@@ -392,6 +393,7 @@ mod tests {
                 protocol: Protocol::Tcp,
                 product: Some("rdp".to_owned()),
                 banner: None,
+                cpe: None,
             }],
             open_ports: vec![3389],
             insecure_score: 0.0,

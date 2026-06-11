@@ -342,6 +342,7 @@ mod tests {
                     protocol,
                     product: product.map(str::to_owned),
                     banner: None,
+                    cpe: None,
                 })
                 .collect(),
             vulnerabilities: vulns

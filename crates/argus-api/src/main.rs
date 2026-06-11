@@ -32,6 +32,7 @@ mod seed;
 mod store;
 mod vulns;
 
+use argus_vuln::intel::IntelCache;
 use auth::{AuthContext, AuthKeys, LoginLimiter};
 use seed::{scored_from_discovered, seed_assets, ScoredAsset, Summary};
 use store::{IngestLocks, Store, StoreError};
@@ -49,6 +50,8 @@ pub struct AppState {
     pub signup_enabled: bool,
     /// Per-tenant ingest serialization (manual scans vs. scheduled runs).
     pub ingest_locks: IngestLocks,
+    /// Cached live vulnerability intelligence (NVD / CISA KEV / EPSS).
+    pub intel: IntelCache,
 }
 
 #[tokio::main]
@@ -64,15 +67,17 @@ async fn main() {
     bootstrap(&store).await;
 
     let ingest_locks = IngestLocks::default();
+    let intel = IntelCache::from_env();
     let state = AppState {
         store,
         keys: AuthKeys::from_secret(&auth::load_or_generate_secret()),
         limiter: Arc::new(LoginLimiter::default()),
         signup_enabled: env_flag("ARGUS_SIGNUP_ENABLED", true),
         ingest_locks: ingest_locks.clone(),
+        intel: intel.clone(),
     };
 
-    spawn_scheduler(state.store.clone(), ingest_locks);
+    spawn_scheduler(state.store.clone(), ingest_locks, intel);
 
     let app = router(state);
     let bind = std::env::var("ARGUS_BIND").unwrap_or_else(|_| "127.0.0.1:8088".to_owned());
@@ -429,7 +434,14 @@ async fn run_scan(
         hosts,
         candidates,
     } = discovery;
-    let (live, changes) = ingest(&state.store, &state.ingest_locks, auth.tenant_id, hosts).await?;
+    let (live, changes) = ingest(
+        &state.store,
+        &state.ingest_locks,
+        &state.intel,
+        auth.tenant_id,
+        hosts,
+    )
+    .await?;
     state
         .store
         .audit(
@@ -469,7 +481,7 @@ async fn run_scan(
 /// decision is unit-testable without touching the live feeds.
 fn choose_vulns_risk(
     prev: Option<&ScoredAsset>,
-    enrichment: argus_vuln::nvd::Enrichment,
+    enrichment: argus_vuln::intel::Enrichment,
     exposure: argus_core::Exposure,
     criticality: argus_core::Criticality,
 ) -> (Vec<argus_core::Vulnerability>, argus_core::RiskScore) {
@@ -505,6 +517,7 @@ fn choose_vulns_risk(
 async fn ingest(
     store: &Store,
     ingest_locks: &IngestLocks,
+    intel: &IntelCache,
     tenant_id: Uuid,
     hosts: Vec<argus_discovery::DiscoveredHost>,
 ) -> Result<(usize, usize), (StatusCode, String)> {
@@ -528,17 +541,13 @@ async fn ingest(
         asset.asset.fingerprint.device_type = Some(cls.device_type);
         asset.asset.fingerprint.confidence = cls.confidence;
 
-        // Live enrichment: NVD search for the asset's products + authoritative
-        // CISA-KEV + current EPSS, with a reachability signal so change
-        // detection runs on stable, non-regressive data (see choose_vulns_risk).
-        let products: Vec<String> = asset
-            .services
-            .iter()
-            .filter_map(|s| s.product.clone())
-            .collect();
-        let enrichment =
-            argus_vuln::nvd::enrich_checked(std::mem::take(&mut asset.vulnerabilities), &products)
-                .await;
+        // Live enrichment: version-matched NVD CVEs for each service's
+        // application CPE + authoritative CISA-KEV + current EPSS (all cached
+        // process-wide), with a reachability signal so change detection runs
+        // on stable, non-regressive data (see choose_vulns_risk).
+        let enrichment = intel
+            .enrich_checked(std::mem::take(&mut asset.vulnerabilities), &asset.services)
+            .await;
 
         // Change detection against the previously stored asset (by correlation
         // key): carry forward identity (id + first_seen), stamp last_seen, then
@@ -595,7 +604,7 @@ const PRUNE_EVERY_TICKS: u64 = 120;
 /// `UPDATE .. RETURNING` (or the equivalent under the memory mutex), multiple
 /// replicas remain best-effort safe: each due monitor is claimed by at most
 /// one replica per interval.
-fn spawn_scheduler(store: Store, ingest_locks: IngestLocks) {
+fn spawn_scheduler(store: Store, ingest_locks: IngestLocks, intel: IntelCache) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         let semaphore = Arc::new(tokio::sync::Semaphore::new(SCHEDULER_CONCURRENCY));
@@ -622,12 +631,13 @@ fn spawn_scheduler(store: Store, ingest_locks: IngestLocks) {
             for claimed in due {
                 let store = store.clone();
                 let ingest_locks = ingest_locks.clone();
+                let intel = intel.clone();
                 let semaphore = Arc::clone(&semaphore);
                 tokio::spawn(async move {
                     // Acquire a permit inside the task so the tick loop never
                     // blocks; the permit drops when the task ends.
                     let _permit = semaphore.acquire_owned().await;
-                    run_scheduled_scan(&store, &ingest_locks, &claimed).await;
+                    run_scheduled_scan(&store, &ingest_locks, &intel, &claimed).await;
                 });
             }
         }
@@ -636,13 +646,24 @@ fn spawn_scheduler(store: Store, ingest_locks: IngestLocks) {
 
 /// Execute one scheduled scan for one tenant. Errors are logged, not returned —
 /// a failing tenant run must not affect the scheduler or other tenants.
-async fn run_scheduled_scan(store: &Store, ingest_locks: &IngestLocks, claimed: &db::DueMonitor) {
+async fn run_scheduled_scan(
+    store: &Store,
+    ingest_locks: &IngestLocks,
+    intel: &IntelCache,
+    claimed: &db::DueMonitor,
+) {
     let result = async {
         let discovery = discover(&claimed.target, claimed.deep)
             .await
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-        let (live, changes) =
-            ingest(store, ingest_locks, claimed.tenant_id, discovery.hosts).await?;
+        let (live, changes) = ingest(
+            store,
+            ingest_locks,
+            intel,
+            claimed.tenant_id,
+            discovery.hosts,
+        )
+        .await?;
         // Only emit an audit row when something actually changed — a stable
         // monitor must not write one audit row per (zero-change) run forever.
         if changes > 0 {
@@ -706,8 +727,14 @@ async fn import_nmap(
     }
     let hosts = argus_discovery::nmap::parse(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("nmap XML: {e}")))?;
-    let (imported, _changes) =
-        ingest(&state.store, &state.ingest_locks, auth.tenant_id, hosts).await?;
+    let (imported, _changes) = ingest(
+        &state.store,
+        &state.ingest_locks,
+        &state.intel,
+        auth.tenant_id,
+        hosts,
+    )
+    .await?;
     state
         .store
         .audit(
@@ -730,7 +757,7 @@ mod tests {
         Asset, AssetId, AssetType, Criticality, Cvss, Exposure, Fingerprint, Protocol, RiskBand,
         RiskScore, Service, Severity, Vulnerability,
     };
-    use argus_vuln::nvd::Enrichment;
+    use argus_vuln::intel::Enrichment;
     use time::OffsetDateTime;
 
     use super::*;
@@ -765,6 +792,7 @@ mod tests {
                 protocol: Protocol::Tcp,
                 product: Some("nginx".to_owned()),
                 banner: None,
+                cpe: None,
             }],
             vulnerabilities: vulns,
             risk: RiskScore {

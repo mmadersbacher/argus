@@ -84,6 +84,11 @@ pub struct Service {
     pub product: Option<String>,
     /// Raw banner text, if captured.
     pub banner: Option<String>,
+    /// Application CPE name as reported by nmap `-sV` (e.g.
+    /// `cpe:/a:openbsd:openssh:8.9p1`) — the precise key for NVD vulnerability
+    /// correlation. Absent for heuristic engines and pre-CPE stored assets.
+    #[serde(default)]
+    pub cpe: Option<String>,
 }
 
 /// A network interface belonging to an asset.
