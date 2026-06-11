@@ -16,6 +16,7 @@ argus-core = { path = "../argus-core" }
 argus-discovery = { path = "../argus-discovery" }
 argus-vuln = { path = "../argus-vuln" }
 argus-intel = { path = "../argus-intel" }
+argus-report = { path = "../argus-report" }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }

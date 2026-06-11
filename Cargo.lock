@@ -43,6 +43,7 @@ dependencies = [
  "argus-core",
  "argus-discovery",
  "argus-intel",
+ "argus-report",
  "argus-vuln",
  "axum",
  "hex",
@@ -88,6 +89,15 @@ name = "argus-intel"
 version = "0.1.0"
 dependencies = [
  "argus-core",
+]
+
+[[package]]
+name = "argus-report"
+version = "0.1.0"
+dependencies = [
+ "argus-core",
+ "serde",
+ "time",
 ]
 
 [[package]]

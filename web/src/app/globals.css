@@ -82,3 +82,30 @@ body {
 .argus-slide {
   animation: argus-slide 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* ---- print: render only the report sheet ------------------------------------
+   The Reports page wraps its printable content in #report-print. Everything
+   else (sidebar, topbar, controls marked .no-print) disappears; band colors
+   and badge fills are forced so the PDF keeps the risk semantics. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #report-print,
+  #report-print * {
+    visibility: visible;
+  }
+  #report-print {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    padding: 0;
+  }
+  #report-print * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}

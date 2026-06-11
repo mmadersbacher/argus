@@ -329,3 +329,104 @@ export const saveMonitor = (cfg: MonitorSettings) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify(cfg),
   });
+
+// ---- reports ----------------------------------------------------------------
+
+export type HighlightLevel = "critical" | "warn" | "info";
+
+export interface ReportHighlight {
+  level: HighlightLevel;
+  text: string;
+}
+
+export interface TypeCount {
+  asset_type: AssetType;
+  count: number;
+}
+
+export interface CriticalityCount {
+  criticality: Criticality;
+  count: number;
+}
+
+export interface BandCount {
+  band: RiskBand;
+  count: number;
+}
+
+export interface ReportInventory {
+  total: number;
+  internet_facing: number;
+  new_in_period: number;
+  stale: number;
+  by_type: TypeCount[];
+  by_criticality: CriticalityCount[];
+}
+
+export interface ReportTopAsset {
+  name: string;
+  ip: string | null;
+  asset_type: AssetType;
+  criticality: Criticality;
+  exposure: Exposure;
+  risk: RiskScore;
+  cves: number;
+  kev_cves: number;
+}
+
+export interface ReportRisk {
+  average: number;
+  distribution: BandCount[];
+  top_assets: ReportTopAsset[];
+}
+
+export interface ReportTopCve {
+  cve_id: string;
+  severity: Severity;
+  cvss: number | null;
+  epss: number | null;
+  kev: boolean;
+  affected: number;
+}
+
+export interface ReportVulns {
+  unique_cves: number;
+  kev_cves: number;
+  critical_cves: number;
+  high_cves: number;
+  assets_with_kev: number;
+  top_cves: ReportTopCve[];
+}
+
+export interface ReportActivity {
+  events_in_period: number;
+  new_assets: number;
+  service_changes: number;
+  vuln_changes: number;
+  risk_changes: number;
+}
+
+export interface ReportMonitoring {
+  configured: boolean;
+  enabled: boolean;
+  interval_minutes: number | null;
+  target: string | null;
+  last_run_at: string | null;
+  coverage_percent: number;
+}
+
+/** Point-in-time exposure report from GET /api/report. */
+export interface ExposureReport {
+  generated_at: string;
+  period_days: number;
+  highlights: ReportHighlight[];
+  inventory: ReportInventory;
+  risk: ReportRisk;
+  vulnerabilities: ReportVulns;
+  activity: ReportActivity;
+  monitoring: ReportMonitoring;
+}
+
+/** The API clamps days to 1..=90 (event retention window). */
+export const fetchReport = (days = 30) =>
+  fetchJSON<ExposureReport>(`/api/report?days=${days}`);

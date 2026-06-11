@@ -66,7 +66,15 @@ connectors, policy/reporting, billing) is multi-week.
       assets), Network (subnet-grouped host grid), Risk (distribution,
       top-10 assets, risk-change feed)
 - [ ] `argus-policy`: advisory segmentation
-- [ ] `argus-report`: compliance / exec reports
+- [x] `argus-report`: exposure / posture reports — pure, IO-free report
+      builder (`argus_report::build`: executive-summary highlights, inventory
+      breakdowns, risk distribution + top-10 assets, CVE posture with
+      KEV→EPSS→CVSS-ranked top-10, period activity from change events,
+      monitoring coverage), served as `GET /api/report?days=1..90` and
+      rendered print-ready on the console's Reports page (browser
+      print-to-PDF, `@media print` isolates the report sheet). Remaining:
+      scheduled report delivery (e-mail/webhook), per-framework compliance
+      mappings.
 - [ ] IR workflows, billing fields
 - [x] `argus-vuln` live NVD + EPSS + CISA-KEV intelligence: nmap application
       CPEs captured per service (`Service.cpe`), NVD queried by

@@ -18,6 +18,7 @@ export type IconName =
   | "menu"
   | "x"
   | "external"
+  | "file"
   | "logout";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
@@ -157,6 +158,14 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
           <path d="M10 5.5H6.5A1.5 1.5 0 0 0 5 7v10.5A1.5 1.5 0 0 0 6.5 19H17a1.5 1.5 0 0 0 1.5-1.5V14" />
           <path d="M14 4.5h5.5V10" />
           <path d="M19.5 4.5 11 13" />
+        </svg>
+      );
+    case "file":
+      return (
+        <svg {...common}>
+          <path d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5z" />
+          <path d="M13.5 3.5v5h5" />
+          <path d="M9 13h6M9 16.5h6" />
         </svg>
       );
     case "logout":

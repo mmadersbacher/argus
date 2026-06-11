@@ -1,0 +1,17 @@
+[package]
+name = "argus-report"
+description = "Argus reporting: build point-in-time exposure / posture reports from the scored inventory, change history and monitoring state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-core = { path = "../argus-core" }
+serde = { workspace = true }
+time = { workspace = true }
