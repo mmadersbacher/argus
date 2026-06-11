@@ -10,9 +10,10 @@ use argus_core::{AssetType, Fingerprint};
 /// common management consoles — enough to classify the bulk of an enterprise,
 /// IoT and OT estate from a no-privilege connect scan.
 pub const PORTS: &[u16] = &[
-    21, 22, 23, 25, 53, 80, 102, 110, 111, 135, 139, 143, 161, 389, 443, 445, 502, 623, 636, 993,
-    995, 1433, 1521, 1883, 2049, 2375, 3306, 3389, 4840, 5060, 5432, 5601, 5672, 5900, 5984, 6379,
-    7001, 8000, 8080, 8443, 8883, 9000, 9092, 9200, 11211, 20000, 27017, 47808, 49152,
+    21, 22, 23, 25, 53, 80, 102, 110, 111, 135, 139, 143, 161, 389, 443, 445, 502, 515, 554, 623,
+    631, 636, 902, 993, 995, 1433, 1521, 1883, 2049, 2375, 3306, 3389, 4840, 5060, 5432, 5601,
+    5672, 5900, 5984, 5985, 6379, 7001, 8000, 8080, 8291, 8443, 8883, 9000, 9092, 9100, 9200,
+    11211, 20000, 27017, 47808, 49152,
 ];
 
 /// Best-effort service name for a well-known port.
@@ -35,8 +36,12 @@ pub fn service_name(port: u16) -> Option<&'static str> {
         389 => "ldap",
         443 => "https",
         502 => "modbus",
+        515 => "lpd",
+        554 => "rtsp",
         623 => "ipmi",
+        631 => "ipp",
         636 => "ldaps",
+        902 => "vmware-auth",
         993 => "imaps",
         995 => "pop3s",
         1433 => "mssql",
@@ -53,12 +58,15 @@ pub fn service_name(port: u16) -> Option<&'static str> {
         5672 => "amqp",
         5900 => "vnc",
         5984 => "couchdb",
+        5985 => "winrm",
         6379 => "redis",
         7001 => "weblogic",
         8000 | 8080 => "http-alt",
+        8291 => "winbox",
         8443 => "https-alt",
         9000 => "http-mgmt",
         9092 => "kafka",
+        9100 => "jetdirect",
         9200 => "elasticsearch",
         11211 => "memcached",
         20000 => "dnp3",
@@ -79,15 +87,25 @@ pub fn classify(open: &[u16]) -> (AssetType, Fingerprint) {
     let (asset_type, device_type, os) =
         if has(502) || has(102) || has(20000) || has(47808) || has(4840) {
             (AssetType::Ot, "industrial-controller", None)
+        } else if has(554) {
+            // RTSP: streaming video — overwhelmingly IP cameras / NVRs.
+            (AssetType::Iot, "ip-camera", None)
+        } else if has(9100) || has(631) || has(515) {
+            (AssetType::Iot, "printer", None)
+        } else if has(8291) {
+            // Winbox is MikroTik-only, so it wins even when ssh/web are open.
+            (AssetType::Network, "network-device", Some("RouterOS"))
         } else if has(1883) || has(8883) {
             (AssetType::Iot, "iot-broker-or-device", None)
         } else if has(2375) {
             (AssetType::It, "container-host", Some("Linux"))
+        } else if has(902) {
+            (AssetType::It, "virtualization-host", Some("ESXi"))
         } else if has(6379) || has(27017) || has(9200) || has(11211) || has(5984) {
             (AssetType::It, "data-store", Some("Linux"))
         } else if has(1433) || has(1521) || has(3306) || has(5432) {
             (AssetType::It, "database-server", None)
-        } else if has(3389) || has(445) || has(139) || has(135) {
+        } else if has(3389) || has(445) || has(139) || has(135) || has(5985) {
             (AssetType::It, "windows-host", Some("Windows"))
         } else if has(623) {
             (AssetType::It, "bmc-ipmi", None)

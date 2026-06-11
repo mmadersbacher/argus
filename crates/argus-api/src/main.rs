@@ -539,6 +539,11 @@ async fn ingest(
                 .iter()
                 .filter_map(|s| s.product.clone())
                 .collect(),
+            cpes: asset
+                .services
+                .iter()
+                .filter_map(|s| s.cpe.clone())
+                .collect(),
             os: asset.asset.fingerprint.os.clone(),
         });
         asset.asset.asset_type = cls.asset_type;

@@ -21,6 +21,9 @@ pub struct Features {
     pub open_ports: Vec<u16>,
     /// Service product strings.
     pub services: Vec<String>,
+    /// Application CPEs nmap reported for the services
+    /// (`cpe:/a:vendor:product:…`) — precise vendor/product identity.
+    pub cpes: Vec<String>,
     /// OS hint, if detected.
     pub os: Option<String>,
 }
@@ -60,23 +63,41 @@ impl Classifier for HeuristicClassifier {
             confidence = confidence.saturating_add(30);
         }
 
-        let (port_type, port_label) = port_hint(&features.open_ports);
+        let service_class = service_hint(&features.services, &features.cpes);
+        if let Some((_, label, evidence)) = &service_class {
+            rationale.push(format!("service \"{evidence}\" → {label}"));
+            confidence = confidence.saturating_add(25);
+        }
+
+        let port_class = port_hint(&features.open_ports);
         if !features.open_ports.is_empty() {
-            rationale.push(format!("ports {:?} → {port_label}", features.open_ports));
+            rationale.push(format!(
+                "ports {:?} → {}",
+                features.open_ports, port_class.1
+            ));
             confidence = confidence.saturating_add(20);
         }
 
-        let (asset_type, device_type) = match vendor_class {
-            Some((vt, vlabel)) => (vt, vlabel.to_owned()),
-            None => (port_type, port_label.to_owned()),
-        };
-
+        let os_class = features.os.as_deref().and_then(os_hint);
         if features.os.is_some() {
             confidence = confidence.saturating_add(10);
         }
         if !features.services.is_empty() {
             confidence = confidence.saturating_add(10);
         }
+
+        // Identity precedence: OUI vendor (physical identity) beats service
+        // products (software identity) beats the port profile; an OS match
+        // only types hosts whose port profile said nothing specific.
+        let (asset_type, device_type) = vendor_class
+            .map(|(t, l)| (t, l.to_owned()))
+            .or_else(|| service_class.map(|(t, l, _)| (t, l.to_owned())))
+            .or_else(|| {
+                (port_class.0 != AssetType::Unknown)
+                    .then(|| (port_class.0, port_class.1.to_owned()))
+            })
+            .or_else(|| os_class.map(|(t, l)| (t, l.to_owned())))
+            .unwrap_or_else(|| (port_class.0, port_class.1.to_owned()));
 
         Classification {
             asset_type,
@@ -196,20 +217,120 @@ fn vendor_hint(vendor: &str) -> Option<(AssetType, &'static str)> {
     }
 }
 
+/// Identity evidence from service products and application CPEs.
+///
+/// First match wins, so rules are ordered most-specific first. Matching is
+/// whole-token (split on non-alphanumerics) over the lowercased product
+/// strings plus the vendor/product components of each CPE — `"Apache Axis"`
+/// must not look like an Axis camera, but `cpe:/a:mikrotik:routeros` must
+/// hit the `routeros` rule.
+fn service_hint(services: &[String], cpes: &[String]) -> Option<(AssetType, &'static str, String)> {
+    /// (token, class, label) — token is matched whole, never as a substring.
+    const RULES: &[(&str, AssetType, &str)] = &[
+        // cameras / NVRs
+        ("hikvision", AssetType::Iot, "ip-camera"),
+        ("dahua", AssetType::Iot, "ip-camera"),
+        ("vivotek", AssetType::Iot, "ip-camera"),
+        // routers / network OS
+        ("routeros", AssetType::Network, "network-device"),
+        ("mikrotik", AssetType::Network, "network-device"),
+        ("openwrt", AssetType::Network, "network-device"),
+        ("vyos", AssetType::Network, "network-device"),
+        ("fortios", AssetType::Network, "firewall"),
+        ("fortinet", AssetType::Network, "firewall"),
+        // virtualization
+        ("esxi", AssetType::It, "virtualization-host"),
+        ("vcenter", AssetType::It, "virtualization-host"),
+        ("proxmox", AssetType::It, "virtualization-host"),
+        // storage
+        ("synology", AssetType::It, "nas-storage"),
+        ("qnap", AssetType::It, "nas-storage"),
+        ("truenas", AssetType::It, "nas-storage"),
+        // printing
+        ("jetdirect", AssetType::Iot, "printer"),
+        ("cups", AssetType::Iot, "printer"),
+        ("printer", AssetType::Iot, "printer"),
+        // embedded
+        ("dropbear", AssetType::Iot, "embedded-device"),
+        ("busybox", AssetType::Iot, "embedded-device"),
+        ("lwip", AssetType::Iot, "embedded-device"),
+        // windows software stack (generic — keep after everything specific)
+        ("iis", AssetType::It, "windows-host"),
+        ("exchange", AssetType::It, "windows-host"),
+        ("windows", AssetType::It, "windows-host"),
+    ];
+
+    let mut tokens: Vec<String> = Vec::new();
+    for s in services {
+        tokens.extend(
+            s.to_lowercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    for cpe in cpes {
+        // cpe:/a:vendor:product:version — vendor and product are identity.
+        let rest = cpe
+            .strip_prefix("cpe:/a:")
+            .or_else(|| cpe.strip_prefix("cpe:2.3:a:"));
+        if let Some(rest) = rest {
+            for part in rest.split(':').take(2) {
+                tokens.extend(
+                    part.to_lowercase()
+                        .split(|c: char| !c.is_ascii_alphanumeric())
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_owned),
+                );
+            }
+        }
+    }
+    RULES
+        .iter()
+        .find(|(needle, _, _)| tokens.iter().any(|t| t == needle))
+        .map(|&(needle, asset_type, label)| (asset_type, label, needle.to_owned()))
+}
+
+/// Type a host from the detected operating system, as a fallback when
+/// neither vendor, service nor port profile said anything specific.
+fn os_hint(os: &str) -> Option<(AssetType, &'static str)> {
+    let o = os.to_lowercase();
+    let has = |needle: &str| o.contains(needle);
+    if has("routeros") || has("junos") || has("ios-xe") || has("cisco ios") || has("nx-os") {
+        Some((AssetType::Network, "network-device"))
+    } else if has("esxi") {
+        Some((AssetType::It, "virtualization-host"))
+    } else if has("windows") {
+        Some((AssetType::It, "windows-host"))
+    } else if has("linux") || has("ubuntu") || has("debian") || has("centos") || has("freebsd") {
+        Some((AssetType::It, "linux-host"))
+    } else {
+        None
+    }
+}
+
 /// Map an open-port profile to a device-class hint.
 fn port_hint(ports: &[u16]) -> (AssetType, &'static str) {
     let has = |p: u16| ports.contains(&p);
     if has(502) || has(102) || has(20000) || has(47808) || has(4840) {
         (AssetType::Ot, "industrial-controller")
+    } else if has(554) {
+        (AssetType::Iot, "ip-camera")
+    } else if has(9100) || has(631) || has(515) {
+        (AssetType::Iot, "printer")
+    } else if has(8291) {
+        (AssetType::Network, "network-device")
     } else if has(1883) || has(8883) {
         (AssetType::Iot, "iot-broker-or-device")
     } else if has(2375) {
         (AssetType::It, "container-host")
+    } else if has(902) {
+        (AssetType::It, "virtualization-host")
     } else if has(6379) || has(27017) || has(9200) || has(11211) || has(5984) {
         (AssetType::It, "data-store")
     } else if has(1433) || has(1521) || has(3306) || has(5432) {
         (AssetType::It, "database-server")
-    } else if has(3389) || has(445) || has(139) || has(135) {
+    } else if has(3389) || has(445) || has(139) || has(135) || has(5985) {
         (AssetType::It, "windows-host")
     } else if has(623) {
         (AssetType::It, "bmc-ipmi")
@@ -237,8 +358,7 @@ mod tests {
         let f = Features {
             vendor: Some("Hikvision Digital Technology".into()),
             open_ports: vec![80],
-            services: Vec::new(),
-            os: None,
+            ..Default::default()
         };
         let c = classify(&f);
         assert_eq!(c.asset_type, AssetType::Iot);
@@ -277,8 +397,94 @@ mod tests {
             vendor: Some("Cisco Systems".into()),
             open_ports: vec![22, 443],
             services: vec!["OpenSSH 8.6".into()],
+            cpes: vec!["cpe:/a:openbsd:openssh:8.6".into()],
             os: Some("IOS".into()),
         };
         assert!(classify(&rich).confidence > classify(&bare).confidence);
+    }
+
+    #[test]
+    fn cpe_identity_beats_the_port_profile() {
+        // ssh+web ports alone would say linux-host; the RouterOS CPE says router.
+        let f = Features {
+            open_ports: vec![22, 80],
+            services: vec!["MikroTik RouterOS sshd".into()],
+            cpes: vec!["cpe:/a:mikrotik:routeros:6.49".into()],
+            ..Default::default()
+        };
+        let c = classify(&f);
+        assert_eq!(c.asset_type, AssetType::Network);
+        assert_eq!(c.device_type, "network-device");
+        assert!(c.rationale.iter().any(|r| r.contains("service")));
+    }
+
+    #[test]
+    fn vendor_outranks_service_evidence() {
+        // OUI says camera vendor; the ssh banner alone must not retype it.
+        let f = Features {
+            vendor: Some("Hikvision Digital Technology".into()),
+            services: vec!["Dropbear sshd".into()],
+            cpes: vec!["cpe:/a:matt_johnston:dropbear_ssh_server:2019.78".into()],
+            ..Default::default()
+        };
+        let c = classify(&f);
+        assert_eq!(c.device_type, "ip-camera");
+    }
+
+    #[test]
+    fn dropbear_marks_embedded_devices() {
+        let f = Features {
+            open_ports: vec![22],
+            services: vec!["Dropbear sshd 2019.78".into()],
+            ..Default::default()
+        };
+        let c = classify(&f);
+        assert_eq!(c.asset_type, AssetType::Iot);
+        assert_eq!(c.device_type, "embedded-device");
+    }
+
+    #[test]
+    fn token_matching_avoids_substring_false_positives() {
+        // "Apache Axis" (SOAP stack) must not look like an Axis camera, and
+        // nothing here should hit the printer rule.
+        let f = Features {
+            open_ports: vec![8080],
+            services: vec!["Apache Axis 1.4".into()],
+            ..Default::default()
+        };
+        let c = classify(&f);
+        assert_eq!(c.device_type, "web-server");
+    }
+
+    #[test]
+    fn printer_and_camera_ports_classify() {
+        let printer = Features {
+            open_ports: vec![80, 9100],
+            ..Default::default()
+        };
+        assert_eq!(classify(&printer).device_type, "printer");
+        let cam = Features {
+            open_ports: vec![80, 554],
+            ..Default::default()
+        };
+        assert_eq!(classify(&cam).device_type, "ip-camera");
+    }
+
+    #[test]
+    fn os_types_hosts_when_ports_are_silent() {
+        let f = Features {
+            os: Some("Microsoft Windows Server 2019".into()),
+            ..Default::default()
+        };
+        let c = classify(&f);
+        assert_eq!(c.asset_type, AssetType::It);
+        assert_eq!(c.device_type, "windows-host");
+        // With a specific port profile, the profile wins over the OS label.
+        let db = Features {
+            open_ports: vec![5432],
+            os: Some("Linux 5.15".into()),
+            ..Default::default()
+        };
+        assert_eq!(classify(&db).device_type, "database-server");
     }
 }
