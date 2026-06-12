@@ -250,7 +250,10 @@ fn parse_ports(host: Node<'_, '_>) -> (Vec<Service>, Vec<u16>) {
         };
         open_ports.push(portid);
         let service = port.children().find(|n| n.has_tag_name("service"));
-        let product = service.and_then(service_label);
+        let product = service.map_or_else(
+            || fingerprint::service_name(portid).map(str::to_owned),
+            |svc| service_label(svc, portid),
+        );
         let cpe = service.and_then(service_cpe);
         services.push(Service {
             port: portid,
@@ -276,23 +279,48 @@ fn service_cpe(svc: Node<'_, '_>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn service_label(svc: Node<'_, '_>) -> Option<String> {
-    let name = svc.attribute("name").unwrap_or("");
-    let prod = svc.attribute("product").unwrap_or("");
-    let ver = svc.attribute("version").unwrap_or("");
-    let mut label = if prod.is_empty() {
-        name.to_owned()
-    } else {
-        prod.to_owned()
-    };
-    if !ver.is_empty() {
-        label.push(' ');
-        label.push_str(ver);
+/// Build the service's product string for CVE correlation.
+///
+/// When nmap reports a real product (`-sV`), use `product [version]` verbatim
+/// — precise software identity (e.g. `OpenSSH 8.9p1`). Otherwise nmap only
+/// knows a port-derived service *name*; emit the canonical protocol token
+/// Argus uses — identical to [`fingerprint::service_name`], i.e. the light
+/// connect scan — so protocol-level catalog CVEs correlate the same
+/// regardless of scan backend. Without this, nmap's `microsoft-ds` /
+/// `ms-wbt-server` would never match the catalog's `smb` / `rdp` entries, and
+/// a deep scan would find *fewer* protocol CVEs (EternalBlue, BlueKeep) than
+/// the light scan. The nmap name (normalized) is only a fallback for ports
+/// outside the canonical map.
+fn service_label(svc: Node<'_, '_>, port: u16) -> Option<String> {
+    let prod = svc.attribute("product").unwrap_or("").trim();
+    if !prod.is_empty() {
+        let ver = svc.attribute("version").unwrap_or("").trim();
+        return Some(if ver.is_empty() {
+            prod.to_owned()
+        } else {
+            format!("{prod} {ver}")
+        });
     }
-    if label.is_empty() {
-        None
-    } else {
-        Some(label)
+    fingerprint::service_name(port)
+        .map(str::to_owned)
+        .or_else(|| {
+            let name = svc.attribute("name").unwrap_or("").trim();
+            (!name.is_empty()).then(|| normalize_service_name(name).to_owned())
+        })
+}
+
+/// Map an nmap service name to the canonical protocol token Argus correlates
+/// on, for ports outside [`fingerprint::service_name`]'s map (a service on a
+/// non-standard port). Names that are already canonical pass through.
+fn normalize_service_name(name: &str) -> &str {
+    match name {
+        "microsoft-ds" | "netbios-ssn" | "netbios-dgm" | "cifs" => "smb",
+        "ms-wbt-server" | "ms-wbt" => "rdp",
+        "ms-sql-s" | "ms-sql-m" => "mssql",
+        "oracle-tns" => "oracle-db",
+        "postgresql" => "postgres",
+        "domain" => "dns",
+        other => other,
     }
 }
 
@@ -333,6 +361,65 @@ mod tests {
             .expect("ssh service");
         // The application CPE is captured; the OS CPE sibling is skipped.
         assert_eq!(ssh.cpe.as_deref(), Some("cpe:/a:openbsd:openssh:8.9p1"));
+    }
+
+    #[test]
+    fn productless_service_uses_the_canonical_port_token() {
+        // nmap with no -sV product calls 445 "microsoft-ds"; we must emit the
+        // canonical "smb" so EternalBlue/SMBGhost (catalog `smb`) correlate —
+        // the same token the light scan derives from the port.
+        let xml = r#"<?xml version="1.0"?><nmaprun><host>
+            <status state="up"/>
+            <address addr="10.0.0.5" addrtype="ipv4"/>
+            <ports>
+              <port protocol="tcp" portid="445"><state state="open"/>
+                <service name="microsoft-ds"/></port>
+              <port protocol="tcp" portid="3389"><state state="open"/>
+                <service name="ms-wbt-server"/></port>
+            </ports></host></nmaprun>"#;
+        let hosts = parse(xml).expect("parse");
+        let services = &hosts[0].services;
+        let by_port = |p: u16| {
+            services
+                .iter()
+                .find(|s| s.port == p)
+                .and_then(|s| s.product.as_deref())
+        };
+        assert_eq!(by_port(445), Some("smb"));
+        assert_eq!(by_port(3389), Some("rdp"));
+    }
+
+    #[test]
+    fn nonstandard_port_falls_back_to_a_normalized_nmap_name() {
+        // RDP on a non-standard port: fingerprint::service_name has no entry,
+        // so the nmap name is normalized to the canonical "rdp".
+        let xml = r#"<?xml version="1.0"?><nmaprun><host>
+            <status state="up"/>
+            <address addr="10.0.0.6" addrtype="ipv4"/>
+            <ports>
+              <port protocol="tcp" portid="13389"><state state="open"/>
+                <service name="ms-wbt-server"/></port>
+            </ports></host></nmaprun>"#;
+        let hosts = parse(xml).expect("parse");
+        assert_eq!(hosts[0].services[0].product.as_deref(), Some("rdp"));
+    }
+
+    #[test]
+    fn real_product_identity_is_preserved_over_the_canonical_token() {
+        // When nmap -sV reports a product, the precise identity wins over the
+        // port's generic token (so version-specific CVEs still correlate).
+        let xml = r#"<?xml version="1.0"?><nmaprun><host>
+            <status state="up"/>
+            <address addr="10.0.0.7" addrtype="ipv4"/>
+            <ports>
+              <port protocol="tcp" portid="80"><state state="open"/>
+                <service name="http" product="Apache httpd" version="2.4.49"/></port>
+            </ports></host></nmaprun>"#;
+        let hosts = parse(xml).expect("parse");
+        assert_eq!(
+            hosts[0].services[0].product.as_deref(),
+            Some("Apache httpd 2.4.49")
+        );
     }
 
     #[test]
