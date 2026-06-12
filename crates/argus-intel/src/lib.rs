@@ -48,61 +48,101 @@ pub trait Classifier {
     fn classify(&self, features: &Features) -> Classification;
 }
 
+/// Confidence floor before any evidence is weighed.
+const BASE_CONFIDENCE: i32 = 25;
+/// Confidence added by each signal that *agrees* with the chosen asset type.
+const W_VENDOR: i32 = 30;
+const W_SERVICE: i32 = 25;
+const W_PORT: i32 = 20;
+const W_OS: i32 = 10;
+/// Confidence removed when a strong identity signal (vendor or service)
+/// points at a *different* asset type than the one chosen.
+const CONFLICT_PENALTY: i32 = 15;
+/// Confidence ceiling — a heuristic model never claims certainty.
+const CONFIDENCE_CAP: i32 = 95;
+
 /// Rule / open-data classifier: combines vendor (OUI), port profile and services.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeuristicClassifier;
 
 impl Classifier for HeuristicClassifier {
     fn classify(&self, features: &Features) -> Classification {
-        let mut rationale = Vec::new();
-        let mut confidence: u8 = 25;
-
         let vendor_class = features.vendor.as_deref().and_then(vendor_hint);
-        if let (Some((_, label)), Some(vendor)) = (vendor_class, features.vendor.as_deref()) {
-            rationale.push(format!("vendor \"{vendor}\" → {label}"));
-            confidence = confidence.saturating_add(30);
-        }
-
         let service_class = service_hint(&features.services, &features.cpes);
-        if let Some((_, label, evidence)) = &service_class {
-            rationale.push(format!("service \"{evidence}\" → {label}"));
-            confidence = confidence.saturating_add(25);
-        }
-
         let port_class = port_hint(&features.open_ports);
-        if !features.open_ports.is_empty() {
-            rationale.push(format!(
-                "ports {:?} → {}",
-                features.open_ports, port_class.1
-            ));
-            confidence = confidence.saturating_add(20);
-        }
-
+        let has_ports = !features.open_ports.is_empty() && port_class.0 != AssetType::Unknown;
         let os_class = features.os.as_deref().and_then(os_hint);
-        if features.os.is_some() {
-            confidence = confidence.saturating_add(10);
-        }
-        if !features.services.is_empty() {
-            confidence = confidence.saturating_add(10);
-        }
 
         // Identity precedence: OUI vendor (physical identity) beats service
         // products (software identity) beats the port profile; an OS match
         // only types hosts whose port profile said nothing specific.
         let (asset_type, device_type) = vendor_class
             .map(|(t, l)| (t, l.to_owned()))
-            .or_else(|| service_class.map(|(t, l, _)| (t, l.to_owned())))
             .or_else(|| {
-                (port_class.0 != AssetType::Unknown)
-                    .then(|| (port_class.0, port_class.1.to_owned()))
+                service_class
+                    .as_ref()
+                    .map(|(t, l, _)| (*t, (*l).to_owned()))
             })
+            .or_else(|| has_ports.then(|| (port_class.0, port_class.1.to_owned())))
             .or_else(|| os_class.map(|(t, l)| (t, l.to_owned())))
-            .unwrap_or_else(|| (port_class.0, port_class.1.to_owned()));
+            .unwrap_or_else(|| (AssetType::Unknown, "host".to_owned()));
+
+        // Confidence reflects how well the evidence *agrees* on `asset_type`,
+        // not how much evidence there is. Strong identity signals (vendor,
+        // service) that disagree lower confidence and are flagged; coarse
+        // signals (port profile, OS family) only corroborate — being
+        // unspecific, they never veto a precise signal, just note the mismatch.
+        let mut rationale = Vec::new();
+        let mut score = BASE_CONFIDENCE;
+
+        if let (Some((t, label)), Some(vendor)) = (vendor_class, features.vendor.as_deref()) {
+            if t == asset_type {
+                rationale.push(format!("vendor \"{vendor}\" → {label}"));
+                score += W_VENDOR;
+            } else {
+                rationale.push(format!("conflict: vendor \"{vendor}\" suggests {label}"));
+                score -= CONFLICT_PENALTY;
+            }
+        }
+
+        if let Some((t, label, evidence)) = &service_class {
+            if *t == asset_type {
+                rationale.push(format!("service \"{evidence}\" → {label}"));
+                score += W_SERVICE;
+            } else {
+                rationale.push(format!("conflict: service \"{evidence}\" suggests {label}"));
+                score -= CONFLICT_PENALTY;
+            }
+        }
+
+        if has_ports {
+            if port_class.0 == asset_type {
+                rationale.push(format!(
+                    "ports {:?} → {}",
+                    features.open_ports, port_class.1
+                ));
+                score += W_PORT;
+            } else {
+                rationale.push(format!(
+                    "note: port profile {:?} resembles {}",
+                    features.open_ports, port_class.1
+                ));
+            }
+        }
+
+        // A matching OS family corroborates; a mismatching one says too little
+        // to count for or against (kernel ≠ device role), so it stays silent.
+        if let Some((t, label)) = os_class {
+            if t == asset_type {
+                rationale.push(format!("os → {label}"));
+                score += W_OS;
+            }
+        }
 
         Classification {
             asset_type,
             device_type,
-            confidence: confidence.min(95),
+            confidence: u8::try_from(score.clamp(0, CONFIDENCE_CAP)).unwrap_or(0),
             rationale,
         }
     }
@@ -468,6 +508,45 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(classify(&cam).device_type, "ip-camera");
+    }
+
+    #[test]
+    fn conflicting_strong_signals_lower_confidence_and_are_flagged() {
+        // OUI says IP camera (Iot); a service banner says ESXi (It). Both are
+        // strong identity signals and they disagree — confidence must drop
+        // below the vendor-only case and the clash must be in the rationale.
+        let camera_only = Features {
+            vendor: Some("Hikvision Digital Technology".into()),
+            ..Default::default()
+        };
+        let conflicted = Features {
+            vendor: Some("Hikvision Digital Technology".into()),
+            services: vec!["VMware ESXi 7.0".into()],
+            ..Default::default()
+        };
+        let base = classify(&camera_only);
+        let clash = classify(&conflicted);
+        assert_eq!(clash.asset_type, AssetType::Iot); // vendor still wins
+        assert!(clash.confidence < base.confidence);
+        assert!(clash.rationale.iter().any(|r| r.starts_with("conflict:")));
+    }
+
+    #[test]
+    fn coarse_port_mismatch_does_not_penalize_a_precise_signal() {
+        // A camera with only port 80 open: port_hint says "web-server", but an
+        // unspecific HTTP port must not lower confidence in the OUI identity.
+        let with_port = classify(&Features {
+            vendor: Some("Hikvision Digital Technology".into()),
+            open_ports: vec![80],
+            ..Default::default()
+        });
+        let without_port = classify(&Features {
+            vendor: Some("Hikvision Digital Technology".into()),
+            ..Default::default()
+        });
+        assert_eq!(with_port.device_type, "ip-camera");
+        assert_eq!(with_port.confidence, without_port.confidence);
+        assert!(with_port.rationale.iter().any(|r| r.starts_with("note:")));
     }
 
     #[test]

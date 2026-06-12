@@ -86,11 +86,16 @@ impl CveRecord {
     }
 }
 
-/// Extract the first version-looking token (starts with a digit) from a product string.
+/// Extract the first dotted version-looking token from a product string —
+/// one that starts with a digit and contains a dot (`8.9p1`, `2.4.49`).
+///
+/// Requiring a dot avoids mistaking a bare number for a version: a model
+/// number or a year ("Windows Server 2019" → not "2019"), which would
+/// otherwise be compared against catalog version ranges and mis-correlate.
 fn extract_version(product: &str) -> Option<&str> {
     product
         .split_whitespace()
-        .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .find(|tok| tok.starts_with(|c: char| c.is_ascii_digit()) && tok.contains('.'))
 }
 
 /// Split a product string into lowercase alphanumeric tokens.
@@ -167,13 +172,23 @@ pub fn risk_inputs(
         .filter_map(|v| v.epss.map(|e| e.score))
         .fold(0.0_f32, f32::max);
     let kev_present = vulns.iter().any(|v| v.kev);
+    let critical_vulns = count_severity(vulns, Severity::Critical);
+    let high_vulns = count_severity(vulns, Severity::High);
     RiskInputs {
         max_cvss,
         max_epss,
         kev_present,
+        critical_vulns,
+        high_vulns,
         exposure,
         criticality,
     }
+}
+
+/// Count an asset's vulnerabilities at exactly `severity`, saturating at
+/// `u32::MAX` (a count no real host approaches).
+fn count_severity(vulns: &[Vulnerability], severity: Severity) -> u32 {
+    u32::try_from(vulns.iter().filter(|v| v.severity == severity).count()).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -253,6 +268,15 @@ mod tests {
     }
 
     #[test]
+    fn bare_year_is_not_mistaken_for_a_version() {
+        // "Windows Server 2019" must not yield "2019" as a version (no dot).
+        assert_eq!(extract_version("Windows Server 2019"), None);
+        // Real dotted versions are still found.
+        assert_eq!(extract_version("OpenSSH 8.9p1"), Some("8.9p1"));
+        assert_eq!(extract_version("nginx 1.24.0 (Ubuntu)"), Some("1.24.0"));
+    }
+
+    #[test]
     fn word_boundary_match_avoids_substring_false_positives() {
         // "Praxis" must not match the "Axis" record; "Offspring" must not match
         // "Spring"; an unrelated banner must not pick up "php"/"xz" by substring.
@@ -309,5 +333,30 @@ mod tests {
         assert!((inputs.max_cvss - 9.8).abs() < f32::EPSILON);
         assert!((inputs.max_epss - 0.90).abs() < f32::EPSILON);
         assert!(inputs.kev_present);
+        // One Critical (B) and one Medium (A) → the surface counts reflect
+        // severity, not just the worst signal.
+        assert_eq!(inputs.critical_vulns, 1);
+        assert_eq!(inputs.high_vulns, 0);
+    }
+
+    #[test]
+    fn risk_inputs_count_findings_by_severity() {
+        let mk = |cve: &str, sev| Vulnerability {
+            cve_id: cve.into(),
+            cvss: None,
+            epss: None,
+            kev: false,
+            severity: sev,
+        };
+        let vulns = vec![
+            mk("A", Severity::Critical),
+            mk("B", Severity::Critical),
+            mk("C", Severity::High),
+            mk("D", Severity::Medium),
+            mk("E", Severity::Low),
+        ];
+        let inputs = risk_inputs(&vulns, Exposure::Internal, Criticality::Medium);
+        assert_eq!(inputs.critical_vulns, 2);
+        assert_eq!(inputs.high_vulns, 1);
     }
 }
