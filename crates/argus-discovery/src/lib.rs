@@ -8,6 +8,7 @@
 //! for large ranges. Passive sensing gets layered on top later.
 
 pub mod arp;
+pub mod banner;
 pub mod fingerprint;
 pub mod masscan;
 pub mod nmap;
@@ -34,6 +35,10 @@ pub struct ScanOptions {
     pub ports: Vec<u16>,
     /// Per-connection timeout.
     pub connect_timeout: Duration,
+    /// How long to wait for a service's connect-time banner before giving up,
+    /// or `None` to skip banner reads entirely (pure connect scan). Reading is
+    /// always payload-free; a service that says nothing just yields no banner.
+    pub banner_timeout: Option<Duration>,
     /// Maximum hosts probed concurrently.
     pub concurrency: usize,
     /// Skip dead /24 subnets via sampling before the full scan.
@@ -45,6 +50,7 @@ impl Default for ScanOptions {
         Self {
             ports: fingerprint::PORTS.to_vec(),
             connect_timeout: Duration::from_millis(700),
+            banner_timeout: Some(Duration::from_secs(1)),
             concurrency: 256,
             sample: false,
         }
@@ -87,6 +93,7 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
     let sem = Arc::new(Semaphore::new(opts.concurrency.max(1)));
     let ports = Arc::new(opts.ports.clone());
     let connect_timeout = opts.connect_timeout;
+    let banner_timeout = opts.banner_timeout;
 
     let mut handles = Vec::with_capacity(scanned.len());
     for ip in scanned {
@@ -94,7 +101,7 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
         let ports = Arc::clone(&ports);
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok()?;
-            let open = portscan::scan_host(ip, &ports, connect_timeout).await;
+            let open = portscan::scan_host(ip, &ports, connect_timeout, banner_timeout).await;
             if open.is_empty() {
                 None
             } else {
@@ -151,19 +158,26 @@ pub async fn deep_scan(
         .unwrap_or_default()
 }
 
-fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
-    open.sort_unstable();
-    let (asset_type, fingerprint) = fingerprint::classify(&open);
-    let insecure_score = fingerprint::insecure_service_score(&open);
+fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {
+    open.sort_unstable_by_key(|(port, _)| *port);
+    let ports: Vec<u16> = open.iter().map(|(port, _)| *port).collect();
+    let (asset_type, fingerprint) = fingerprint::classify(&ports);
+    let insecure_score = fingerprint::insecure_service_score(&ports);
     let now = OffsetDateTime::now_utc();
 
     let services = open
-        .iter()
-        .map(|&port| Service {
+        .into_iter()
+        .map(|(port, raw)| Service {
             port,
             protocol: Protocol::Tcp,
-            product: fingerprint::service_name(port).map(str::to_owned),
-            banner: None,
+            // Prefer a product parsed from the connect-time banner (e.g.
+            // "OpenSSH 8.9p1" → version-specific CVEs); else the port's
+            // canonical service token, as before.
+            product: raw
+                .as_deref()
+                .and_then(banner::to_product)
+                .or_else(|| fingerprint::service_name(port).map(str::to_owned)),
+            banner: raw,
             cpe: None,
         })
         .collect();
@@ -191,7 +205,7 @@ fn build_host(ip: IpAddr, mut open: Vec<u16>) -> DiscoveredHost {
     DiscoveredHost {
         asset,
         services,
-        open_ports: open,
+        open_ports: ports,
         insecure_score,
     }
 }
