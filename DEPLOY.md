@@ -64,6 +64,7 @@ scoped by `tenant_id` in every query.
 | `ARGUS_SIGNUP_ENABLED` | `true`                                           | api — self-service tenant signup |
 | `ARGUS_SEED_DEMO`      | `true`                                           | api — demo assets in the bootstrap tenant |
 | `NVD_API_KEY`          | *(unset — NVD lookups paced to 5 req / 30 s)*    | api — [free key](https://nvd.nist.gov/developers/request-an-api-key) lifts live CVE lookups to 50 req / 30 s |
+| `ARGUS_INTEL_CACHE`    | `intel-cache.json`                               | api — snapshot file for the live-intel cache (NVD/KEV/EPSS) so it survives restarts; set empty to disable |
 | `NEXT_PUBLIC_API_URL`  | `http://localhost:8088` (build arg)              | web (baked at build — it's the URL the **browser** calls) |
 
 > For anything beyond a local demo: set `ARGUS_JWT_SECRET`, change the

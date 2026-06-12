@@ -38,6 +38,11 @@ services:
       # Optional: lifts live NVD CVE lookups from 5 to 50 requests / 30 s
       # (https://nvd.nist.gov/developers/request-an-api-key).
       NVD_API_KEY: ${NVD_API_KEY:-}
+      # Live-intel snapshot (NVD/KEV/EPSS) on a volume so the cache survives
+      # container restarts. Set empty to disable persistence.
+      ARGUS_INTEL_CACHE: /var/lib/argus/intel-cache.json
+    volumes:
+      - argus-intel:/var/lib/argus
     ports:
       - "8088:8088"
     depends_on:
@@ -56,3 +61,4 @@ services:
 
 volumes:
   argus-pgdata:
+  argus-intel:

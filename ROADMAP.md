@@ -104,6 +104,8 @@ connectors, policy/reporting, billing) is multi-week.
       catalog remains the offline baseline; CPE-less services correlate
       against it only. Verified end-to-end against the live feeds
       (OpenSSH 8.9p1 → 18 version-relevant CVEs incl. regreSSHion).
-      Remaining: NVD pagination beyond the first 2000 CVEs per product
-      (truncation is logged), cache persistence across restarts.
+      NVD lookups follow pagination past the 2000-per-page limit (capped at
+      10 000 CVEs/product, cap hits logged), and the cache snapshots to disk
+      (`ARGUS_INTEL_CACHE`, atomic write, TTL-checked on restore) so restarts
+      no longer start cold.
 - [ ] animation polish + performance pass

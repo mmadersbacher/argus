@@ -20,10 +20,13 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use argus_core::{Cvss, Epss, Service, Vulnerability};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::nvd;
@@ -46,24 +49,33 @@ const EPSS_CHUNK: usize = 100;
 const MAX_PRODUCTS: usize = 512;
 /// Bound on cached EPSS scores.
 const MAX_EPSS: usize = 8192;
+/// Hard cap on CVEs fetched per product across NVD pages. Real application
+/// products stay well below this (browsers, the worst case, are ~4000);
+/// hitting it is logged so truncation is never silent.
+const MAX_NVD_RESULTS: u64 = 10_000;
+/// On-disk snapshot format version — bump on layout changes so an old file
+/// is discarded instead of misparsed.
+const DISK_VERSION: u32 = 1;
 
-/// A cached value plus the instant it was stored.
-#[derive(Debug, Clone)]
+/// A cached value plus the wall-clock time it was stored. Wall-clock (not
+/// `Instant`) so stamps survive serialization across restarts; a clock that
+/// jumped backwards simply makes the entry stale and it is refetched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Stamp<T> {
-    at: Instant,
+    at: SystemTime,
     value: T,
 }
 
 impl<T> Stamp<T> {
     fn new(value: T) -> Self {
         Self {
-            at: Instant::now(),
+            at: SystemTime::now(),
             value,
         }
     }
 
     fn fresh(&self, ttl: Duration) -> bool {
-        self.at.elapsed() < ttl
+        self.at.elapsed().is_ok_and(|age| age < ttl)
     }
 }
 
@@ -72,7 +84,8 @@ fn shrink_to<T>(map: &mut HashMap<String, Stamp<T>>, cap: usize) {
     if map.len() <= cap {
         return;
     }
-    let mut by_age: Vec<(Instant, String)> = map.iter().map(|(k, s)| (s.at, k.clone())).collect();
+    let mut by_age: Vec<(SystemTime, String)> =
+        map.iter().map(|(k, s)| (s.at, k.clone())).collect();
     by_age.sort_unstable_by_key(|&(at, _)| at);
     let excess = map.len() - cap;
     for (_, key) in by_age.into_iter().take(excess) {
@@ -136,7 +149,7 @@ fn parse_cpe(cpe: &str) -> Option<CpeApp> {
 /// One vulnerable version window from an NVD `cpeMatch` entry. An `exact`
 /// version and the range bounds are mutually exclusive (NVD uses a wildcard
 /// version in the criteria when range bounds are present).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct VersionConstraint {
     exact: Option<String>,
     start_including: Option<String>,
@@ -176,7 +189,7 @@ impl VersionConstraint {
 
 /// One NVD CVE for a cached product: the vulnerability plus the version
 /// windows under which the product is vulnerable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProductCve {
     vuln: Vulnerability,
     constraints: Vec<VersionConstraint>,
@@ -257,6 +270,17 @@ fn matching<'c>(
     })
 }
 
+/// The cache as written to / read from disk. `Arc`s are unwrapped to plain
+/// values; staleness is re-checked against the TTLs on load, so an old file
+/// degrades to an empty cache instead of serving expired data.
+#[derive(Serialize, Deserialize)]
+struct DiskCache {
+    version: u32,
+    kev: Option<Stamp<HashSet<String>>>,
+    epss: HashMap<String, Stamp<Option<f32>>>,
+    products: HashMap<String, Stamp<Vec<ProductCve>>>,
+}
+
 /// Shared cache state behind [`IntelCache`].
 struct Inner {
     /// NVD API key (`NVD_API_KEY`), lifting the rate limit when present.
@@ -273,6 +297,13 @@ struct Inner {
     /// Paces NVD requests to the rate limit and doubles as the single-flight
     /// guard for product fetches.
     nvd_gate: Mutex<Option<Instant>>,
+    /// Snapshot file for persistence across restarts; `None` disables it.
+    persist: Option<PathBuf>,
+    /// Set on every cache write, cleared by [`IntelCache::flush`] — skips
+    /// disk writes when an enrichment pass was served entirely from cache.
+    dirty: AtomicBool,
+    /// Serializes concurrent flushes (tenant scans can enrich in parallel).
+    flush_lock: Mutex<()>,
 }
 
 /// Process-wide cached vulnerability-intelligence client. Cloning is cheap
@@ -283,29 +314,122 @@ pub struct IntelCache {
     inner: Arc<Inner>,
 }
 
+/// Read and parse a snapshot file; `None` (logged) on any failure or on a
+/// version mismatch.
+fn load_snapshot(path: &Path) -> Option<DiskCache> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "intel cache snapshot unreadable");
+            return None;
+        }
+    };
+    let disk: DiskCache = match serde_json::from_slice(&bytes) {
+        Ok(disk) => disk,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "intel cache snapshot unparsable — starting cold");
+            return None;
+        }
+    };
+    if disk.version != DISK_VERSION {
+        tracing::info!(
+            found = disk.version,
+            expected = DISK_VERSION,
+            "intel cache snapshot from another format version — starting cold"
+        );
+        return None;
+    }
+    Some(disk)
+}
+
 impl IntelCache {
     /// Create a cache; `nvd_api_key` lifts the NVD rate limit when set.
     #[must_use]
     pub fn new(nvd_api_key: Option<String>) -> Self {
+        Self::build(nvd_api_key, None)
+    }
+
+    /// Create a cache that restores its state from `path` (fresh entries
+    /// only) and snapshots back to it after enrichment passes that changed
+    /// it. A missing or invalid file simply starts the cache cold.
+    #[must_use]
+    pub fn with_persistence(nvd_api_key: Option<String>, path: impl Into<PathBuf>) -> Self {
+        Self::build(nvd_api_key, Some(path.into()))
+    }
+
+    fn build(nvd_api_key: Option<String>, persist: Option<PathBuf>) -> Self {
         let api_key = nvd_api_key
             .map(|k| k.trim().to_owned())
             .filter(|k| !k.is_empty());
+        // Restore only entries still fresh by their TTL — an old snapshot
+        // degrades to a cold cache, never to stale intelligence.
+        let mut kev = None;
+        let mut epss = HashMap::new();
+        let mut products = HashMap::new();
+        if let Some(disk) = persist.as_deref().and_then(load_snapshot) {
+            kev = disk.kev.filter(|s| s.fresh(KEV_TTL)).map(|s| Stamp {
+                at: s.at,
+                value: Arc::new(s.value),
+            });
+            epss = disk
+                .epss
+                .into_iter()
+                .filter(|(_, s)| s.fresh(EPSS_TTL))
+                .collect();
+            products = disk
+                .products
+                .into_iter()
+                .filter(|(_, s)| s.fresh(NVD_TTL))
+                .map(|(k, s)| {
+                    (
+                        k,
+                        Stamp {
+                            at: s.at,
+                            value: Arc::new(s.value),
+                        },
+                    )
+                })
+                .collect();
+            tracing::info!(
+                kev = kev.is_some(),
+                epss = epss.len(),
+                products = products.len(),
+                "intel cache restored from disk"
+            );
+        }
         Self {
             inner: Arc::new(Inner {
                 api_key,
-                kev: RwLock::new(None),
+                kev: RwLock::new(kev),
                 kev_refresh: Mutex::new(()),
-                epss: RwLock::new(HashMap::new()),
-                products: RwLock::new(HashMap::new()),
+                epss: RwLock::new(epss),
+                products: RwLock::new(products),
                 nvd_gate: Mutex::new(None),
+                persist,
+                dirty: AtomicBool::new(false),
+                flush_lock: Mutex::new(()),
             }),
         }
     }
 
-    /// Create a cache configured from the environment (`NVD_API_KEY`).
+    /// Create a cache configured from the environment: `NVD_API_KEY` lifts
+    /// the NVD rate limit, `ARGUS_INTEL_CACHE` overrides the snapshot file
+    /// (default `intel-cache.json`; set it empty to disable persistence).
     #[must_use]
     pub fn from_env() -> Self {
-        let cache = Self::new(std::env::var("NVD_API_KEY").ok());
+        let path = std::env::var("ARGUS_INTEL_CACHE").map_or_else(
+            |_| Some("intel-cache.json".to_owned()),
+            |p| {
+                let p = p.trim().to_owned();
+                (!p.is_empty()).then_some(p)
+            },
+        );
+        let api_key = std::env::var("NVD_API_KEY").ok();
+        let cache = match path {
+            Some(p) => Self::with_persistence(api_key, p),
+            None => Self::new(api_key),
+        };
         if cache.inner.api_key.is_some() {
             tracing::info!("NVD API key configured (50 requests / 30 s)");
         } else {
@@ -326,6 +450,19 @@ impl IntelCache {
     /// `false` so change detection can keep its previous, stable baseline
     /// instead of diffing against a partial result.
     pub async fn enrich_checked(
+        &self,
+        vulns: Vec<Vulnerability>,
+        services: &[Service],
+    ) -> Enrichment {
+        let enrichment = self.enrich_inner(vulns, services).await;
+        // One snapshot per enrichment pass (skipped when everything was a
+        // cache hit) — feeds refresh hours apart, so write volume is trivial.
+        self.flush().await;
+        enrichment
+    }
+
+    /// [`Self::enrich_checked`] without the trailing snapshot flush.
+    async fn enrich_inner(
         &self,
         mut vulns: Vec<Vulnerability>,
         services: &[Service],
@@ -409,6 +546,7 @@ impl IntelCache {
         let set = Arc::new(nvd::fetch_kev_checked().await?);
         tracing::debug!(cves = set.len(), "CISA KEV catalog refreshed");
         *self.inner.kev.write().await = Some(Stamp::new(Arc::clone(&set)));
+        self.inner.dirty.store(true, AtomicOrdering::Relaxed);
         Some(set)
     }
 
@@ -445,6 +583,7 @@ impl IntelCache {
             }
             shrink_to(&mut guard, MAX_EPSS);
             drop(guard);
+            self.inner.dirty.store(true, AtomicOrdering::Relaxed);
         }
         Some(known)
     }
@@ -472,13 +611,8 @@ impl IntelCache {
         if let Some(hit) = self.cached_product(&key).await {
             return Some(hit);
         }
-        let spacing = if self.inner.api_key.is_some() {
-            NVD_SPACING_KEYED
-        } else {
-            NVD_SPACING
-        };
         if let Some(last) = *gate {
-            let wait = spacing.saturating_sub(last.elapsed());
+            let wait = self.spacing().saturating_sub(last.elapsed());
             if !wait.is_zero() {
                 tokio::time::sleep(wait).await;
             }
@@ -493,45 +627,73 @@ impl IntelCache {
         map.insert(key, Stamp::new(Arc::clone(&cves)));
         shrink_to(&mut map, MAX_PRODUCTS);
         drop(map);
+        self.inner.dirty.store(true, AtomicOrdering::Relaxed);
         Some(cves)
     }
 
-    /// Fetch every NVD CVE whose configurations match `vendor:product`
-    /// (one page; truncation beyond NVD's 2000-per-page maximum is logged).
+    /// Minimum spacing between NVD requests at the current rate limit.
+    fn spacing(&self) -> Duration {
+        if self.inner.api_key.is_some() {
+            NVD_SPACING_KEYED
+        } else {
+            NVD_SPACING
+        }
+    }
+
+    /// Fetch every NVD CVE whose configurations match `vendor:product`,
+    /// following pagination (2000 per page, paced to the rate limit — the
+    /// caller holds the NVD gate for the whole call) up to
+    /// [`MAX_NVD_RESULTS`]; hitting that cap is logged. `None` if any page
+    /// fails: a partial CVE set must not be cached as the product's truth.
     async fn fetch_product(&self, vendor: &str, product: &str) -> Option<Vec<ProductCve>> {
         let match_string = format!("cpe:2.3:a:{vendor}:{product}");
-        let mut req = nvd::client().get(nvd::NVD_API).query(&[
-            ("virtualMatchString", match_string.as_str()),
-            ("resultsPerPage", "2000"),
-        ]);
-        if let Some(api_key) = self.inner.api_key.as_deref() {
-            req = req.header("apiKey", api_key);
-        }
-        let json: serde_json::Value = req
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        let items = json["vulnerabilities"].as_array()?;
-        let fetched = u64::try_from(items.len()).unwrap_or(u64::MAX);
-        let total = json["totalResults"].as_u64().unwrap_or(fetched);
-        if total > fetched {
-            tracing::warn!(
-                vendor,
-                product,
-                total,
-                fetched,
-                "NVD CVE set truncated to the first page"
+        let mut cves: Vec<ProductCve> = Vec::new();
+        let mut start_index: u64 = 0;
+        loop {
+            let index = start_index.to_string();
+            let mut req = nvd::client().get(nvd::NVD_API).query(&[
+                ("virtualMatchString", match_string.as_str()),
+                ("resultsPerPage", "2000"),
+                ("startIndex", index.as_str()),
+            ]);
+            if let Some(api_key) = self.inner.api_key.as_deref() {
+                req = req.header("apiKey", api_key);
+            }
+            let json: serde_json::Value = req
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let items = json["vulnerabilities"].as_array()?;
+            cves.extend(
+                items
+                    .iter()
+                    .filter_map(|item| parse_nvd_item(item, vendor, product)),
             );
+            let fetched = u64::try_from(items.len()).unwrap_or(u64::MAX);
+            start_index = start_index.saturating_add(fetched);
+            let total = json["totalResults"].as_u64().unwrap_or(start_index);
+            // An empty page below `totalResults` means NVD's count and its
+            // pages disagree — stop rather than loop on a phantom remainder.
+            if start_index >= total || fetched == 0 {
+                break;
+            }
+            if start_index >= MAX_NVD_RESULTS {
+                tracing::warn!(
+                    vendor,
+                    product,
+                    total,
+                    fetched = start_index,
+                    "NVD CVE set truncated at the pagination cap"
+                );
+                break;
+            }
+            tokio::time::sleep(self.spacing()).await;
         }
-        let cves: Vec<ProductCve> = items
-            .iter()
-            .filter_map(|item| parse_nvd_item(item, vendor, product))
-            .collect();
         tracing::debug!(
             vendor,
             product,
@@ -539,6 +701,69 @@ impl IntelCache {
             "NVD product CVEs fetched"
         );
         Some(cves)
+    }
+
+    /// Snapshot the cache to its persistence file when dirty. Best-effort:
+    /// every failure is logged and swallowed — persistence is an optimization,
+    /// never a reason to fail an enrichment pass. The write is atomic
+    /// (temp file + rename) so a crash cannot leave a half-written snapshot.
+    async fn flush(&self) {
+        let Some(path) = self.inner.persist.as_deref() else {
+            return;
+        };
+        if !self.inner.dirty.swap(false, AtomicOrdering::Relaxed) {
+            return;
+        }
+        let _serialized = self.inner.flush_lock.lock().await;
+        let disk = DiskCache {
+            version: DISK_VERSION,
+            kev: self.inner.kev.read().await.as_ref().map(|s| Stamp {
+                at: s.at,
+                value: (*s.value).clone(),
+            }),
+            epss: self.inner.epss.read().await.clone(),
+            products: self
+                .inner
+                .products
+                .read()
+                .await
+                .iter()
+                .map(|(k, s)| {
+                    (
+                        k.clone(),
+                        Stamp {
+                            at: s.at,
+                            value: (*s.value).clone(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let json = match serde_json::to_vec(&disk) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(error = %e, "intel cache snapshot serialization failed");
+                return;
+            }
+        };
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        let result = match tokio::fs::write(&tmp, &json).await {
+            Ok(()) => tokio::fs::rename(&tmp, path).await,
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(()) => {
+                tracing::debug!(path = %path.display(), bytes = json.len(), "intel cache snapshot written");
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "intel cache snapshot write failed");
+            }
+        }
     }
 }
 
@@ -724,9 +949,7 @@ mod tests {
         map.insert(
             "old".into(),
             Stamp {
-                at: Instant::now()
-                    .checked_sub(Duration::from_secs(60))
-                    .expect("recent instant"),
+                at: SystemTime::now() - Duration::from_secs(60),
                 value: 1,
             },
         );
@@ -734,5 +957,125 @@ mod tests {
         shrink_to(&mut map, 1);
         assert!(map.contains_key("new"));
         assert!(!map.contains_key("old"));
+    }
+
+    /// Unique per-test snapshot path that cleans up on drop.
+    struct TempSnapshot(PathBuf);
+
+    impl TempSnapshot {
+        fn new(name: &str) -> Self {
+            Self(std::env::temp_dir().join(format!(
+                "argus-intel-test-{name}-{}.json",
+                std::process::id()
+            )))
+        }
+    }
+
+    impl Drop for TempSnapshot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn product_cve(cve_id: &str) -> ProductCve {
+        ProductCve {
+            vuln: Vulnerability {
+                cve_id: cve_id.to_owned(),
+                cvss: None,
+                epss: None,
+                kev: false,
+                severity: Severity::High,
+            },
+            constraints: vec![VersionConstraint::default()],
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_and_reload_roundtrips_the_cache() {
+        let snapshot = TempSnapshot::new("roundtrip");
+        let cache = IntelCache::with_persistence(None, &snapshot.0);
+        cache.inner.products.write().await.insert(
+            "acme:widget".into(),
+            Stamp::new(Arc::new(vec![product_cve("CVE-2024-1")])),
+        );
+        cache
+            .inner
+            .epss
+            .write()
+            .await
+            .insert("CVE-2024-1".into(), Stamp::new(Some(0.5)));
+        *cache.inner.kev.write().await = Some(Stamp::new(Arc::new(HashSet::from([
+            "CVE-2024-1".to_owned()
+        ]))));
+        cache.inner.dirty.store(true, AtomicOrdering::Relaxed);
+        cache.flush().await;
+
+        let restored = IntelCache::with_persistence(None, &snapshot.0);
+        let cves = restored
+            .cached_product("acme:widget")
+            .await
+            .expect("product survives the restart");
+        assert_eq!(cves[0].vuln.cve_id, "CVE-2024-1");
+        assert!(restored
+            .cached_kev()
+            .await
+            .expect("kev survives")
+            .contains("CVE-2024-1"));
+        assert_eq!(
+            restored
+                .inner
+                .epss
+                .read()
+                .await
+                .get("CVE-2024-1")
+                .map(|s| s.value),
+            Some(Some(0.5))
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_entries_are_dropped_on_load() {
+        let snapshot = TempSnapshot::new("stale");
+        let stale = SystemTime::now() - (NVD_TTL + Duration::from_secs(60));
+        let disk = DiskCache {
+            version: DISK_VERSION,
+            kev: Some(Stamp::new(HashSet::from(["CVE-2024-1".to_owned()]))),
+            epss: HashMap::new(),
+            products: HashMap::from([(
+                "acme:widget".to_owned(),
+                Stamp {
+                    at: stale,
+                    value: vec![product_cve("CVE-2024-1")],
+                },
+            )]),
+        };
+        std::fs::write(&snapshot.0, serde_json::to_vec(&disk).unwrap()).unwrap();
+
+        let cache = IntelCache::with_persistence(None, &snapshot.0);
+        assert!(cache.cached_product("acme:widget").await.is_none());
+        assert!(cache.cached_kev().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn snapshot_from_another_format_version_starts_cold() {
+        let snapshot = TempSnapshot::new("version");
+        let disk = DiskCache {
+            version: DISK_VERSION + 1,
+            kev: Some(Stamp::new(HashSet::from(["CVE-2024-1".to_owned()]))),
+            epss: HashMap::new(),
+            products: HashMap::new(),
+        };
+        std::fs::write(&snapshot.0, serde_json::to_vec(&disk).unwrap()).unwrap();
+
+        let cache = IntelCache::with_persistence(None, &snapshot.0);
+        assert!(cache.cached_kev().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn flush_without_changes_writes_nothing() {
+        let snapshot = TempSnapshot::new("clean");
+        let cache = IntelCache::with_persistence(None, &snapshot.0);
+        cache.flush().await;
+        assert!(!snapshot.0.exists());
     }
 }
