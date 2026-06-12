@@ -343,6 +343,9 @@ export interface VulnAffectedAsset {
   risk: number;
   band: RiskBand;
   finding: FindingState | null;
+  /** Marked resolved, but a scan AFTER that decision still sees the CVE —
+   *  the fix did not take (or regressed) and the triage state is stale. */
+  resolved_but_detected: boolean;
 }
 
 /** Vulnerability rollup across the inventory — one row per CVE. */
@@ -371,6 +374,27 @@ export const setFinding = (
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ asset_id, cve_id, status, note }),
+  });
+
+/** Result of a bulk triage call: assets that no longer carry the CVE are
+ *  skipped (reported by id), not failed. */
+export interface BulkOutcome {
+  updated: number;
+  skipped: string[];
+}
+
+/** Set or clear ("open") one CVE's triage status on many assets at once.
+ *  Requires analyst or higher. */
+export const setFindingsBulk = (
+  cve_id: string,
+  asset_ids: string[],
+  status: FindingStatus,
+  note?: string,
+) =>
+  fetchJSON<BulkOutcome>("/api/findings/bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cve_id, asset_ids, status, note }),
   });
 
 /** Requires analyst or higher; 400 carries the validation error as text. */

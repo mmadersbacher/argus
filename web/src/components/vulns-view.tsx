@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   setFinding,
+  setFindingsBulk,
   type FindingState,
   type FindingStatus,
   type Severity,
@@ -16,6 +17,7 @@ import { useVulns } from "@/lib/use-vulns";
 import { formatCvss, formatEpss, timeAgo } from "@/lib/ui";
 import {
   Badge,
+  Button,
   Drawer,
   Input,
   PageHeader,
@@ -139,6 +141,81 @@ function FindingTriage({
         </>
       ) : null}
       {error ? <p className="text-xs text-crit">{error}</p> : null}
+    </div>
+  );
+}
+
+/** One triage decision applied to every affected asset of the CVE at once.
+ *  Deliberately an explicit Apply button (unlike the per-asset select's
+ *  save-on-change): overwriting N decisions must not happen on a misclick. */
+function BulkTriage({
+  cveId,
+  assetIds,
+  onChanged,
+}: {
+  cveId: string;
+  assetIds: string[];
+  onChanged: () => Promise<void>;
+}) {
+  const [status, setStatus] = useState<FindingStatus>("acknowledged");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const apply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setFindingsBulk(cveId, assetIds, status, note.trim() || undefined);
+      setNote("");
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-line bg-surface-2/40 p-3">
+      <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+        Triage all affected assets
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Select
+          value={status}
+          disabled={busy}
+          onChange={(e) => setStatus(e.target.value as FindingStatus)}
+          aria-label={`Bulk triage status for ${cveId}`}
+          className="h-8 w-auto text-xs"
+        >
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {statusLabel[s]}
+            </option>
+          ))}
+        </Select>
+        <div className="min-w-36 flex-1">
+          <Input
+            value={note}
+            disabled={busy}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Shared note (optional)"
+            maxLength={500}
+            aria-label={`Bulk triage note for ${cveId}`}
+            className="h-8 text-xs"
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy}
+          onClick={() => void apply()}
+        >
+          Apply to {assetIds.length} assets
+        </Button>
+      </div>
+      {error ? <p className="mt-1.5 text-xs text-crit">{error}</p> : null}
     </div>
   );
 }
@@ -338,6 +415,9 @@ export function VulnsView() {
                                 {extra > 0 ? ` +${extra} more` : ""}
                               </span>
                             ) : null}
+                            {v.affected.some((a) => a.resolved_but_detected) ? (
+                              <Badge tone="danger">Still detected</Badge>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -397,6 +477,14 @@ export function VulnsView() {
             />
           </div>
 
+          {canTriage && selected.affected.length > 1 ? (
+            <BulkTriage
+              cveId={selected.cve_id}
+              assetIds={selected.affected.map((a) => a.id)}
+              onChanged={reload}
+            />
+          ) : null}
+
           <div>
             <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
               Affected assets ({selected.affected.length})
@@ -411,7 +499,12 @@ export function VulnsView() {
                       <span className="min-w-0 truncate text-sm font-medium text-fg">
                         {a.name}
                       </span>
-                      <RiskBadge band={a.band} value={a.risk} />
+                      <span className="flex shrink-0 items-center gap-2">
+                        {a.resolved_but_detected ? (
+                          <Badge tone="danger">Still detected</Badge>
+                        ) : null}
+                        <RiskBadge band={a.band} value={a.risk} />
+                      </span>
                     </div>
                     <FindingTriage
                       key={`${a.id}-${selected.cve_id}`}

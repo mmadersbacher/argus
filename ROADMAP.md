@@ -92,8 +92,15 @@ connectors, policy/reporting, billing) is multi-week.
       audited), status embedded per affected asset in `GET /api/vulns`, and
       triage controls in the CVE drawer (status select + note, viewer sees
       read-only state). Deliberate v1 semantics: triage is metadata only —
-      it does not alter the computed risk score. Remaining: billing fields,
-      bulk triage, "resolved but still detected" surfacing.
+      it does not alter the computed risk score. Bulk triage applies one
+      decision to every affected asset of a CVE in one call
+      (`POST /api/findings/bulk`, single-statement upsert on Postgres,
+      assets that no longer carry the CVE are skipped + reported, one audit
+      row per action) behind an explicit Apply control in the drawer. A
+      `resolved` finding whose asset is re-scanned *after* the decision and
+      still carries the CVE is flagged "resolved but still detected"
+      (computed server-side from `last_seen` vs. the decision time) in the
+      table row and per affected asset. Remaining: billing fields.
 - [x] `argus-vuln` live NVD + EPSS + CISA-KEV intelligence: nmap application
       CPEs captured per service (`Service.cpe`), NVD queried by
       `virtualMatchString` per vendor:product and matched locally against the

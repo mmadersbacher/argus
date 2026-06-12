@@ -660,6 +660,69 @@ impl Store {
                 .is_some()),
         }
     }
+
+    /// Create or replace one CVE's triage decision on many assets at once
+    /// (a single statement on Postgres).
+    pub async fn set_finding_statuses_bulk(
+        &self,
+        tenant_id: Uuid,
+        asset_ids: &[Uuid],
+        cve_id: &str,
+        status: &str,
+        note: &str,
+        updated_by: &str,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::set_finding_statuses_bulk(
+                pool, tenant_id, asset_ids, cve_id, status, note, updated_by,
+            )
+            .await?),
+            Self::Memory(m) => {
+                let mut inner = m.lock();
+                let updated_at = OffsetDateTime::now_utc();
+                for &asset_id in asset_ids {
+                    inner.findings.insert(
+                        (tenant_id, asset_id, cve_id.to_owned()),
+                        db::FindingStatusRow {
+                            asset_id,
+                            cve_id: cve_id.to_owned(),
+                            status: status.to_owned(),
+                            note: note.to_owned(),
+                            updated_by: updated_by.to_owned(),
+                            updated_at,
+                        },
+                    );
+                }
+                drop(inner);
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove one CVE's triage decision from many assets at once (they
+    /// revert to open).
+    pub async fn clear_finding_statuses_bulk(
+        &self,
+        tenant_id: Uuid,
+        asset_ids: &[Uuid],
+        cve_id: &str,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                Ok(db::clear_finding_statuses_bulk(pool, tenant_id, asset_ids, cve_id).await?)
+            }
+            Self::Memory(m) => {
+                let mut inner = m.lock();
+                for &asset_id in asset_ids {
+                    inner
+                        .findings
+                        .remove(&(tenant_id, asset_id, cve_id.to_owned()));
+                }
+                drop(inner);
+                Ok(())
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

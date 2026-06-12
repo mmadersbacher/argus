@@ -48,6 +48,10 @@ pub struct AffectedAsset {
     pub band: RiskBand,
     /// Analyst triage decision for this (asset, CVE) finding; `None` = open.
     pub finding: Option<FindingState>,
+    /// The finding was marked `resolved`, but the asset has been seen by a
+    /// scan *after* that decision and still carries the CVE — the fix did
+    /// not take (or has regressed) and the triage state is stale.
+    pub resolved_but_detected: bool,
 }
 
 /// The triage state of one (asset, CVE) finding as embedded in the
@@ -131,12 +135,19 @@ pub fn aggregate(assets: &[ScoredAsset], statuses: &[FindingStatusRow]) -> Vec<V
                         updated_by: s.updated_by.clone(),
                         updated_at: s.updated_at,
                     });
+                // "Resolved but still detected": only once a scan has seen
+                // the asset *after* the decision — right after triage there
+                // is no new evidence yet and the flag would be noise.
+                let resolved_but_detected = finding.as_ref().is_some_and(|f| {
+                    f.status == "resolved" && asset.asset.last_seen > f.updated_at
+                });
                 entry.affected.push(AffectedAsset {
                     id: asset.asset.id,
                     name: name.clone(),
                     risk: asset.risk.value,
                     band: asset.risk.band,
                     finding,
+                    resolved_but_detected,
                 });
             }
         }
@@ -367,6 +378,89 @@ mod tests {
         assert_eq!(names, ["high-01", "mid-01", "low-01"]);
         assert_eq!(entries[0].affected[0].band, RiskBand::Critical);
         assert_eq!(entries[0].affected[2].band, RiskBand::Info);
+    }
+
+    fn status_row(
+        asset_id: Uuid,
+        cve: &str,
+        status: &str,
+        updated_at: OffsetDateTime,
+    ) -> FindingStatusRow {
+        FindingStatusRow {
+            asset_id,
+            cve_id: cve.to_owned(),
+            status: status.to_owned(),
+            note: String::new(),
+            updated_by: "analyst@argus.local".to_owned(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn resolved_finding_seen_again_by_a_later_scan_is_flagged() {
+        let decided_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(1);
+        let mut a = asset(
+            "web-01",
+            50.0,
+            vec![vuln("CVE-2024-1", Severity::High, Some(8.0), None, false)],
+        );
+        // The asset was re-scanned an hour after the analyst resolved the
+        // finding — and the CVE is still in its vuln list.
+        a.asset.last_seen = decided_at + time::Duration::hours(1);
+        let statuses = vec![status_row(
+            a.asset.id.0,
+            "CVE-2024-1",
+            "resolved",
+            decided_at,
+        )];
+        let entries = aggregate(std::slice::from_ref(&a), &statuses);
+        assert!(entries[0].affected[0].resolved_but_detected);
+    }
+
+    #[test]
+    fn resolved_finding_without_a_newer_scan_is_not_flagged() {
+        let mut a = asset(
+            "web-01",
+            50.0,
+            vec![vuln("CVE-2024-1", Severity::High, Some(8.0), None, false)],
+        );
+        a.asset.last_seen = OffsetDateTime::UNIX_EPOCH;
+        // Decision is newer than the last scan: no new evidence yet.
+        let decided_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(1);
+        let statuses = vec![status_row(
+            a.asset.id.0,
+            "CVE-2024-1",
+            "resolved",
+            decided_at,
+        )];
+        let entries = aggregate(std::slice::from_ref(&a), &statuses);
+        assert!(!entries[0].affected[0].resolved_but_detected);
+        assert_eq!(
+            entries[0].affected[0]
+                .finding
+                .as_ref()
+                .map(|f| f.status.as_str()),
+            Some("resolved")
+        );
+    }
+
+    #[test]
+    fn non_resolved_statuses_are_never_flagged() {
+        let decided_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(1);
+        for status in ["acknowledged", "false_positive"] {
+            let mut a = asset(
+                "web-01",
+                50.0,
+                vec![vuln("CVE-2024-1", Severity::High, Some(8.0), None, false)],
+            );
+            a.asset.last_seen = decided_at + time::Duration::hours(1);
+            let statuses = vec![status_row(a.asset.id.0, "CVE-2024-1", status, decided_at)];
+            let entries = aggregate(std::slice::from_ref(&a), &statuses);
+            assert!(
+                !entries[0].affected[0].resolved_but_detected,
+                "{status} must not flag"
+            );
+        }
     }
 
     #[test]

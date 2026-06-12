@@ -637,3 +637,53 @@ pub async fn clear_finding_status(
     .await?;
     Ok(result.rows_affected() > 0)
 }
+
+/// Create or replace one CVE's triage decision on many assets in a single
+/// statement (one round-trip, atomic).
+pub async fn set_finding_statuses_bulk(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    asset_ids: &[Uuid],
+    cve_id: &str,
+    status: &str,
+    note: &str,
+    updated_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO finding_status (tenant_id, asset_id, cve_id, status, note, updated_by, updated_at)
+         SELECT $1, unnest($2::uuid[]), $3, $4, $5, $6, now()
+         ON CONFLICT (tenant_id, asset_id, cve_id)
+         DO UPDATE SET status = EXCLUDED.status,
+                       note = EXCLUDED.note,
+                       updated_by = EXCLUDED.updated_by,
+                       updated_at = EXCLUDED.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(asset_ids)
+    .bind(cve_id)
+    .bind(status)
+    .bind(note)
+    .bind(updated_by)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Remove one CVE's triage decision from many assets (they revert to open).
+pub async fn clear_finding_statuses_bulk(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    asset_ids: &[Uuid],
+    cve_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM finding_status
+         WHERE tenant_id = $1 AND cve_id = $2 AND asset_id = ANY($3)",
+    )
+    .bind(tenant_id)
+    .bind(cve_id)
+    .bind(asset_ids)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
