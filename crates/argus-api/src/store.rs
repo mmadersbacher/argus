@@ -1047,4 +1047,154 @@ mod tests {
         assert!(last_run.is_some());
         assert!(store.claim_due_monitors().await.unwrap().is_empty());
     }
+
+    // ---- Postgres integration (gated on TEST_DATABASE_URL) ------------------
+    //
+    // These exercise the `db.rs` path the in-memory backend cannot: the
+    // `tenants` foreign key, the `commit_asset` transaction, the atomic monitor
+    // claim, and the single-statement bulk finding upsert. They self-skip when
+    // `TEST_DATABASE_URL` is unset, so `cargo test` is green with no database;
+    // CI points it at a Postgres service and runs them for real. Isolation is
+    // by random tenant id — every query is tenant-scoped — so concurrent runs
+    // against a shared database never collide and no schema reset is needed.
+
+    /// A migrated Postgres store from `TEST_DATABASE_URL`, or `None` to skip.
+    async fn pg_store() -> Option<Store> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = db::connect(&url)
+            .await
+            .expect("connect to TEST_DATABASE_URL and run migrations");
+        Some(Store::Postgres(pool))
+    }
+
+    /// Register a throwaway tenant with a unique slug/email derived from its id.
+    async fn pg_tenant(store: &Store) -> Uuid {
+        let id = Uuid::new_v4();
+        let suffix = id.simple();
+        store
+            .register_tenant(
+                id,
+                "Test Org",
+                &format!("t-{suffix}"),
+                &admin(id, &format!("a-{suffix}@test.local")),
+            )
+            .await
+            .expect("register tenant");
+        id
+    }
+
+    #[tokio::test]
+    async fn pg_assets_are_tenant_scoped_and_fk_backed() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let t1 = pg_tenant(&store).await;
+        let t2 = pg_tenant(&store).await;
+        for asset in crate::seed::seed_assets() {
+            store.upsert(t1, &asset).await.unwrap();
+        }
+        // A different tenant sees none of t1's assets.
+        assert!(store.load_all(t2).await.unwrap().is_empty());
+        let loaded = store.load_all(t1).await.unwrap();
+        assert!(loaded.len() >= 6);
+        // Highest risk first, like the memory backend.
+        for pair in loaded.windows(2) {
+            assert!(pair[0].risk.value >= pair[1].risk.value);
+        }
+    }
+
+    #[tokio::test]
+    async fn pg_commit_asset_persists_asset_and_events_together() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = pg_tenant(&store).await;
+        let asset = crate::seed::seed_assets().into_iter().next().unwrap();
+        let key = asset.asset.dedup_key();
+        let detail = serde_json::json!({ "added": ["CVE-2024-1"], "removed": [], "kev_added": 0 });
+        store
+            .commit_asset(
+                tenant,
+                &asset,
+                &[("vulns.changed", &detail)],
+                &key,
+                "test-host",
+            )
+            .await
+            .unwrap();
+        // The asset landed in the inventory...
+        assert!(store.load_one(tenant, &key).await.unwrap().is_some());
+        // ...and so did its event, in the same transaction, tenant-scoped.
+        let events = store.list_events(tenant, 50).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "vulns.changed");
+        assert_eq!(events[0].asset_name, "test-host");
+        assert_eq!(events[0].dedup_key, key);
+    }
+
+    #[tokio::test]
+    async fn pg_claim_due_monitors_stamps_and_does_not_reclaim() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = pg_tenant(&store).await;
+        store
+            .set_monitor(tenant, "10.0.0.0/24", 15, true, false)
+            .await
+            .unwrap();
+        // claim_due_monitors is process-global, so assert on OUR tenant only —
+        // a shared test database may hold other tenants' due monitors.
+        let claimed = store.claim_due_monitors().await.unwrap();
+        assert!(claimed
+            .iter()
+            .any(|m| m.tenant_id == tenant && m.target == "10.0.0.0/24"));
+        // The claim stamped last_run_at before returning, so an immediate
+        // second claim must not pick our monitor up again.
+        let again = store.claim_due_monitors().await.unwrap();
+        assert!(!again.iter().any(|m| m.tenant_id == tenant));
+        assert!(store
+            .get_monitor(tenant)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_run_at
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn pg_bulk_finding_status_roundtrips_and_is_scoped() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = pg_tenant(&store).await;
+        let assets = crate::seed::seed_assets();
+        for asset in &assets {
+            store.upsert(tenant, asset).await.unwrap();
+        }
+        let ids: Vec<Uuid> = assets.iter().map(|a| a.asset.id.0).collect();
+        let cve = "CVE-2024-9999";
+        store
+            .set_finding_statuses_bulk(
+                tenant,
+                &ids,
+                cve,
+                "acknowledged",
+                "triaged in bulk",
+                "analyst@test.local",
+            )
+            .await
+            .unwrap();
+        let ours: Vec<_> = store
+            .list_finding_statuses(tenant)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.cve_id == cve)
+            .collect();
+        assert_eq!(ours.len(), ids.len());
+        assert!(ours.iter().all(|s| s.status == "acknowledged"));
+        // Another tenant sees none of it.
+        let other = pg_tenant(&store).await;
+        assert!(store.list_finding_statuses(other).await.unwrap().is_empty());
+    }
 }

@@ -97,11 +97,16 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
 
 ## Quality bar (cross-cutting, do alongside)
 
-- [ ] **Integration/e2e tests.** Current tests are high-quality unit tests, but
-      nothing spawns nmap/masscan or hits real Postgres end-to-end. Add a
-      Postgres-backed API test (testcontainers) and a scan-pipeline test against
-      a stub target. *Done when:* CI runs at least one full ingest against real
-      Postgres.
+- [x] **Postgres integration tests.** Gated `argus-api` tests
+      (`TEST_DATABASE_URL`, run by a CI Postgres service; self-skip locally so
+      `cargo test` is green with no database) cover the `db.rs` path the memory
+      backend cannot: FK-backed tenant scoping, the `commit_asset` transaction,
+      the atomic monitor claim, and the bulk finding upsert.
+- [ ] **Scan-pipeline e2e test**: drive `ingest()` (classify → enrich → score →
+      diff → upsert → events) against real Postgres with a stub discovery
+      result, so the full write path is covered, not just the store methods.
+      Nothing spawns nmap/masscan yet either — a parser-level harness over
+      canned tool output would close that.
 - [ ] **Frontend data layer**: collapse the five near-identical polling hooks
       into one `usePolledResource<T>`; add `AbortController` + an in-flight
       sequence guard so slow polls can't show stale data; pause polling on
