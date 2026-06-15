@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use argus_core::{AssetId, RiskBand, Severity};
+use argus_core::{AssetId, Confidence, RiskBand, Severity};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
@@ -30,6 +30,9 @@ pub struct VulnEntry {
     pub epss: Option<f32>,
     /// Whether any instance is on the CISA KEV catalog.
     pub kev: bool,
+    /// Best match confidence across all instances — the strongest evidence
+    /// that this CVE genuinely applies somewhere in the inventory.
+    pub confidence: Confidence,
     /// Assets affected by this CVE, highest risk first.
     pub affected: Vec<AffectedAsset>,
 }
@@ -46,6 +49,9 @@ pub struct AffectedAsset {
     pub risk: f32,
     /// Qualitative risk band.
     pub band: RiskBand,
+    /// How reliably this CVE was matched to this asset (CPE+version vs.
+    /// version-blind).
+    pub match_confidence: Confidence,
     /// Analyst triage decision for this (asset, CVE) finding; `None` = open.
     pub finding: Option<FindingState>,
     /// The finding was marked `resolved`, but the asset has been seen by a
@@ -115,6 +121,7 @@ pub fn aggregate(assets: &[ScoredAsset], statuses: &[FindingStatusRow]) -> Vec<V
                         cvss: None,
                         epss: None,
                         kev: false,
+                        confidence: Confidence::Low,
                         affected: Vec::new(),
                     },
                     HashSet::new(),
@@ -124,6 +131,7 @@ pub fn aggregate(assets: &[ScoredAsset], statuses: &[FindingStatusRow]) -> Vec<V
             entry.cvss = max_score(entry.cvss, vuln.cvss.as_ref().map(|c| c.base_score));
             entry.epss = max_score(entry.epss, vuln.epss.map(|e| e.score));
             entry.kev |= vuln.kev;
+            entry.confidence = entry.confidence.max(vuln.match_confidence);
             // An asset normally lists a CVE once; guard against duplicates so
             // a repeated instance cannot produce a second affected row.
             if seen.insert(asset.asset.id) {
@@ -146,6 +154,7 @@ pub fn aggregate(assets: &[ScoredAsset], statuses: &[FindingStatusRow]) -> Vec<V
                     name: name.clone(),
                     risk: asset.risk.value,
                     band: asset.risk.band,
+                    match_confidence: vuln.match_confidence,
                     finding,
                     resolved_but_detected,
                 });
@@ -270,6 +279,27 @@ mod tests {
             },
             overrides: crate::seed::AssetOverrides::default(),
         }
+    }
+
+    #[test]
+    fn aggregate_confidence_is_the_best_across_instances() {
+        let mut weak = vuln("CVE-2024-1", Severity::High, Some(8.0), None, false);
+        weak.match_confidence = Confidence::Low;
+        let mut strong = vuln("CVE-2024-1", Severity::High, Some(8.0), None, false);
+        strong.match_confidence = Confidence::Confirmed;
+        let entries = aggregate(
+            &[asset("a", 40.0, vec![weak]), asset("b", 60.0, vec![strong])],
+            &[],
+        );
+        assert_eq!(entries.len(), 1);
+        // Aggregate is the best evidence; per-asset confidence is preserved,
+        // highest-risk asset first.
+        assert_eq!(entries[0].confidence, Confidence::Confirmed);
+        assert_eq!(
+            entries[0].affected[0].match_confidence,
+            Confidence::Confirmed
+        );
+        assert_eq!(entries[0].affected[1].match_confidence, Confidence::Low);
     }
 
     #[test]

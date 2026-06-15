@@ -348,6 +348,8 @@ export interface VulnAffectedAsset {
   name: string;
   risk: number;
   band: RiskBand;
+  /** How reliably this CVE was matched to this asset. */
+  match_confidence: Confidence;
   finding: FindingState | null;
   /** Marked resolved, but a scan AFTER that decision still sees the CVE —
    *  the fix did not take (or regressed) and the triage state is stale. */
@@ -361,6 +363,8 @@ export interface VulnRow {
   cvss: number | null;
   epss: number | null;
   kev: boolean;
+  /** Best match confidence across all affected assets. */
+  confidence: Confidence;
   affected: VulnAffectedAsset[];
 }
 

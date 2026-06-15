@@ -14,7 +14,13 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useVulns } from "@/lib/use-vulns";
-import { formatCvss, formatEpss, timeAgo } from "@/lib/ui";
+import {
+  confidenceHint,
+  confidenceLabel,
+  formatCvss,
+  formatEpss,
+  timeAgo,
+} from "@/lib/ui";
 import {
   Badge,
   Button,
@@ -351,6 +357,7 @@ export function VulnsView() {
                     <th className="px-4 py-3 font-medium">Severity</th>
                     <th className="px-4 py-3 font-medium">CVSS</th>
                     <th className="px-4 py-3 font-medium">EPSS</th>
+                    <th className="px-4 py-3 font-medium">Confidence</th>
                     <th className="px-4 py-3 font-medium">KEV</th>
                     <th className="px-4 py-3 font-medium">Affected assets</th>
                   </tr>
@@ -398,6 +405,14 @@ export function VulnsView() {
                           {formatEpss(v.epss)}
                         </td>
                         <td className="px-4 py-3">
+                          <span
+                            className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
+                            title={confidenceHint[v.confidence]}
+                          >
+                            {confidenceLabel[v.confidence]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
                           {v.kev ? (
                             <Badge tone="danger">KEV</Badge>
                           ) : (
@@ -425,7 +440,7 @@ export function VulnsView() {
                   })}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <EmptyState
                           title="No CVEs match"
                           hint="Adjust the filters or clear the CVE ID search to see more findings."
@@ -503,6 +518,12 @@ export function VulnsView() {
                         {a.resolved_but_detected ? (
                           <Badge tone="danger">Still detected</Badge>
                         ) : null}
+                        <span
+                          className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
+                          title={confidenceHint[a.match_confidence]}
+                        >
+                          {confidenceLabel[a.match_confidence]}
+                        </span>
                         <RiskBadge band={a.band} value={a.risk} />
                       </span>
                     </div>
