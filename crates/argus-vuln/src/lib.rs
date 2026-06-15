@@ -13,7 +13,9 @@ pub mod version;
 
 use std::cmp::Ordering;
 
-use argus_core::{Criticality, Cvss, Epss, Exposure, RiskInputs, Service, Severity, Vulnerability};
+use argus_core::{
+    Confidence, Criticality, Cvss, Epss, Exposure, RiskInputs, Service, Severity, Vulnerability,
+};
 
 /// Which versions of a product a CVE affects.
 #[derive(Debug, Clone, Copy)]
@@ -69,19 +71,22 @@ pub struct CveRecord {
 }
 
 impl CveRecord {
-    fn to_vulnerability(self) -> Vulnerability {
+    fn to_vulnerability(self, match_confidence: Confidence) -> Vulnerability {
         Vulnerability {
             cve_id: self.cve_id.to_owned(),
             cvss: Some(Cvss {
                 base_score: self.cvss,
                 vector: None,
             }),
+            // The catalog carries an approximate, frozen EPSS probability and
+            // no percentile; the live overlay replaces both when reachable.
             epss: Some(Epss {
                 score: self.epss,
-                percentile: self.epss,
+                percentile: None,
             }),
             kev: self.kev,
             severity: self.severity,
+            match_confidence,
         }
     }
 }
@@ -135,7 +140,17 @@ pub fn correlate_product(product: &str) -> Vec<Vulnerability> {
             VersionRange::Any => true,
             range => version.is_some_and(|v| range.contains(v)),
         })
-        .map(|rec| rec.to_vulnerability())
+        .map(|rec| {
+            // A version-blind (`Any`) hit matched only the product token — low
+            // confidence. A hit inside an explicit version range was actually
+            // version-checked — high confidence.
+            let confidence = if matches!(rec.affected, VersionRange::Any) {
+                Confidence::Low
+            } else {
+                Confidence::High
+            };
+            rec.to_vulnerability(confidence)
+        })
         .collect()
 }
 
@@ -174,6 +189,20 @@ pub fn risk_inputs(
     let kev_present = vulns.iter().any(|v| v.kev);
     let critical_vulns = count_severity(vulns, Severity::Critical);
     let high_vulns = count_severity(vulns, Severity::High);
+    // The score's confidence is that of the vulnerability driving it: highest
+    // CVSS, then KEV, then the more certain match. An empty set is a confident
+    // "nothing found".
+    let confidence = vulns
+        .iter()
+        .max_by(|a, b| {
+            let sa = a.cvss.as_ref().map_or(0.0, |c| c.base_score);
+            let sb = b.cvss.as_ref().map_or(0.0, |c| c.base_score);
+            sa.partial_cmp(&sb)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.kev.cmp(&b.kev))
+                .then_with(|| a.match_confidence.cmp(&b.match_confidence))
+        })
+        .map_or(Confidence::Confirmed, |v| v.match_confidence);
     RiskInputs {
         max_cvss,
         max_epss,
@@ -182,6 +211,7 @@ pub fn risk_inputs(
         high_vulns,
         exposure,
         criticality,
+        confidence,
     }
 }
 
@@ -310,10 +340,11 @@ mod tests {
                 }),
                 epss: Some(Epss {
                     score: 0.10,
-                    percentile: 0.10,
+                    percentile: Some(0.10),
                 }),
                 kev: false,
                 severity: Severity::Medium,
+                match_confidence: Confidence::High,
             },
             Vulnerability {
                 cve_id: "B".into(),
@@ -323,10 +354,11 @@ mod tests {
                 }),
                 epss: Some(Epss {
                     score: 0.90,
-                    percentile: 0.90,
+                    percentile: Some(0.90),
                 }),
                 kev: true,
                 severity: Severity::Critical,
+                match_confidence: Confidence::Confirmed,
             },
         ];
         let inputs = risk_inputs(&vulns, Exposure::InternetFacing, Criticality::High);
@@ -347,6 +379,7 @@ mod tests {
             epss: None,
             kev: false,
             severity: sev,
+            match_confidence: Confidence::High,
         };
         let vulns = vec![
             mk("A", Severity::Critical),
@@ -358,5 +391,52 @@ mod tests {
         let inputs = risk_inputs(&vulns, Exposure::Internal, Criticality::Medium);
         assert_eq!(inputs.critical_vulns, 2);
         assert_eq!(inputs.high_vulns, 1);
+    }
+
+    #[test]
+    fn version_blind_matches_are_low_confidence() {
+        // A protocol-level (`VersionRange::Any`) catalog hit is version-blind.
+        let smb = correlate_product("smb");
+        assert!(!smb.is_empty());
+        assert!(smb.iter().all(|v| v.match_confidence == Confidence::Low));
+        // A version-checked hit (OpenSSH inside the regreSSHion range) is High.
+        let ssh = correlate_product("OpenSSH 8.9p1");
+        let regresshion = ssh
+            .iter()
+            .find(|v| v.cve_id == "CVE-2024-6387")
+            .expect("regreSSHion correlates");
+        assert_eq!(regresshion.match_confidence, Confidence::High);
+    }
+
+    #[test]
+    fn risk_confidence_follows_the_score_driver() {
+        // The highest-CVSS vuln drives the score, so its match confidence is
+        // the score's confidence — even when a lower-CVSS vuln is more certain.
+        let vulns = vec![
+            Vulnerability {
+                cve_id: "low-but-certain".into(),
+                cvss: Some(Cvss {
+                    base_score: 4.0,
+                    vector: None,
+                }),
+                epss: None,
+                kev: false,
+                severity: Severity::Medium,
+                match_confidence: Confidence::Confirmed,
+            },
+            Vulnerability {
+                cve_id: "high-but-blind".into(),
+                cvss: Some(Cvss {
+                    base_score: 9.8,
+                    vector: None,
+                }),
+                epss: None,
+                kev: false,
+                severity: Severity::Critical,
+                match_confidence: Confidence::Low,
+            },
+        ];
+        let inputs = risk_inputs(&vulns, Exposure::Internal, Criticality::Medium);
+        assert_eq!(inputs.confidence, Confidence::Low);
     }
 }

@@ -270,8 +270,8 @@ mod tests {
 
     use argus_core::tenant::Role;
     use argus_core::{
-        Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, RiskBand,
-        RiskScore, Severity, Vulnerability,
+        Asset, AssetId, AssetType, Confidence, Criticality, Exposure, Fingerprint, Interface,
+        RiskBand, RiskScore, Severity, Vulnerability,
     };
     use time::OffsetDateTime;
 
@@ -288,6 +288,7 @@ mod tests {
             epss: None,
             kev: false,
             severity: Severity::High,
+            match_confidence: Confidence::High,
         }
     }
 
@@ -313,6 +314,7 @@ mod tests {
             risk: RiskScore {
                 value: 50.0,
                 band: RiskBand::from_value(50.0),
+                confidence: Confidence::High,
             },
             overrides: crate::seed::AssetOverrides::default(),
         }
@@ -324,6 +326,7 @@ mod tests {
             keys: AuthKeys::from_secret(b"test-secret"),
             limiter: Arc::new(LoginLimiter::default()),
             signup_enabled: false,
+            scan_allow_private: true,
             ingest_locks: IngestLocks::default(),
             intel: argus_vuln::intel::IntelCache::new(None),
         }

@@ -11,6 +11,17 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use argus_core::Severity;
+use serde::{Deserialize, Serialize};
+
+/// One EPSS data point from FIRST.org: probability of exploitation in the next
+/// 30 days and the matching percentile rank, both `0.0..=1.0`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EpssScore {
+    /// Exploitation probability.
+    pub score: f32,
+    /// Percentile rank among all scored CVEs.
+    pub percentile: f32,
+}
 
 /// NVD 2.0 CVE API endpoint.
 pub(crate) const NVD_API: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
@@ -51,10 +62,11 @@ pub async fn fetch_kev() -> HashSet<String> {
     fetch_kev_checked().await.unwrap_or_default()
 }
 
-/// Live EPSS scores for the given CVE ids (single batched request), or `None`
-/// if the request / parse failed (distinct from a reachable-but-empty
+/// Live EPSS scores + percentiles for the given CVE ids (single batched request).
+///
+/// `None` if the request / parse failed (distinct from a reachable-but-empty
 /// response). See [`fetch_epss`] for the lossy wrapper.
-pub async fn fetch_epss_checked(cves: &[String]) -> Option<HashMap<String, f32>> {
+pub async fn fetch_epss_checked(cves: &[String]) -> Option<HashMap<String, EpssScore>> {
     if cves.is_empty() {
         return Some(HashMap::new());
     }
@@ -73,27 +85,43 @@ pub async fn fetch_epss_checked(cves: &[String]) -> Option<HashMap<String, f32>>
         .iter()
         .filter_map(|d| {
             let id = d["cve"].as_str()?.to_owned();
-            let epss = d["epss"].as_str()?.parse::<f32>().ok()?;
-            Some((id, epss))
+            let score = d["epss"].as_str()?.parse::<f32>().ok()?;
+            // Percentile rides along in the same record; default to 0 only if
+            // FIRST.org omits it (it does not in practice).
+            let percentile = d["percentile"]
+                .as_str()
+                .and_then(|p| p.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            Some((id, EpssScore { score, percentile }))
         })
         .collect();
     Some(map)
 }
 
 /// Live EPSS scores for the given CVE ids (single batched request).
-pub async fn fetch_epss(cves: &[String]) -> HashMap<String, f32> {
+pub async fn fetch_epss(cves: &[String]) -> HashMap<String, EpssScore> {
     fetch_epss_checked(cves).await.unwrap_or_default()
 }
 
-/// Extract the best available CVSS base score (v3.1 > v3.0 > v2) and the
-/// derived severity from an NVD `metrics` object.
+/// Extract the CVSS base score and derived severity from an NVD `metrics`
+/// object, preferring the newest metric set (v3.1 > v3.0 > v2) and taking the
+/// **maximum** base score within it.
+///
+/// NVD frequently returns several entries for one version (its own analysis
+/// plus a CNA's). Taking the max — rather than an arbitrarily-ordered first
+/// entry — keeps the risk engine from being silently under-scored.
 pub(crate) fn extract_cvss(metrics: &serde_json::Value) -> (Option<f32>, Severity) {
     for key in ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"] {
-        if let Some(entry) = metrics[key].as_array().and_then(|a| a.first()) {
-            if let Some(score) = entry["cvssData"]["baseScore"].as_f64() {
-                let score = score as f32;
-                return (Some(score), Severity::from_cvss(score));
-            }
+        let Some(entries) = metrics[key].as_array() else {
+            continue;
+        };
+        let best = entries
+            .iter()
+            .filter_map(|entry| entry["cvssData"]["baseScore"].as_f64())
+            .reduce(f64::max);
+        if let Some(score) = best {
+            let score = score as f32;
+            return (Some(score), Severity::from_cvss(score));
         }
     }
     (None, Severity::None)
@@ -117,5 +145,18 @@ mod tests {
         let (score, severity) = extract_cvss(&serde_json::json!({}));
         assert!(score.is_none());
         assert_eq!(severity, Severity::None);
+    }
+
+    #[test]
+    fn takes_the_maximum_of_multiple_cvss_entries() {
+        // NVD's own analysis (7.5) plus a CNA's (9.8) for the same CVE — the
+        // engine must take the higher, not whichever NVD happened to list first.
+        let metrics = serde_json::json!({ "cvssMetricV31": [
+            { "cvssData": { "baseScore": 7.5 } },
+            { "cvssData": { "baseScore": 9.8 } },
+        ]});
+        let (score, severity) = extract_cvss(&metrics);
+        assert!((score.unwrap() - 9.8).abs() < 0.01);
+        assert_eq!(severity, Severity::Critical);
     }
 }

@@ -17,7 +17,7 @@ pub mod portscan;
 pub mod sampling;
 pub mod target;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -247,15 +247,49 @@ pub fn enrich_macs(hosts: &mut [DiscoveredHost]) {
     }
 }
 
-/// Whether an address is on a private / internal range (light exposure heuristic).
+/// Whether an address is on a private / internal range (light exposure
+/// heuristic). Covers RFC1918, loopback, link-local, CGNAT (RFC6598
+/// `100.64.0.0/10`), IPv6 unique-local / link-local, and IPv4-mapped IPv6.
 pub(crate) fn is_internal(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        IpAddr::V4(v4) => is_internal_v4(v4),
         IpAddr::V6(v6) => {
+            // Resolve an IPv4-mapped address (`::ffff:a.b.c.d`) by its V4
+            // identity so `10.x` / loopback cannot slip through as public.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_internal_v4(v4);
+            }
             v6.is_loopback()
                 || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
                 || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
         }
+    }
+}
+
+/// IPv4 private/internal classification, including CGNAT (`100.64.0.0/10`).
+fn is_internal_v4(v4: Ipv4Addr) -> bool {
+    v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || matches!(v4.octets(), [100, 64..=127, _, _]) // CGNAT (RFC 6598)
+}
+
+/// Whether `ip` must be refused as a scan target by a multi-tenant server
+/// unless internal scanning is explicitly enabled.
+///
+/// Covers everything [`is_internal`] does — RFC1918, loopback, link-local
+/// (incl. the `169.254.169.254` cloud-metadata endpoint), CGNAT, IPv6
+/// ULA/link-local, IPv4-mapped IPv6 — plus unspecified, broadcast and
+/// documentation ranges, so the server cannot be turned into an
+/// internal-network pivot (SSRF).
+#[must_use]
+pub fn is_disallowed_target(ip: IpAddr) -> bool {
+    if is_internal(ip) {
+        return true;
+    }
+    match ip {
+        IpAddr::V4(v4) => v4.is_unspecified() || v4.is_broadcast() || v4.is_documentation(),
+        IpAddr::V6(v6) => v6.is_unspecified(),
     }
 }
 
@@ -271,10 +305,23 @@ mod tests {
     }
 
     #[test]
-    fn loopback_is_internal() {
+    fn internal_ranges_are_detected() {
         assert!(is_internal("127.0.0.1".parse().unwrap()));
         assert!(is_internal("10.1.2.3".parse().unwrap()));
+        assert!(is_internal("100.64.0.1".parse().unwrap())); // CGNAT
+        assert!(is_internal("::ffff:10.0.0.1".parse().unwrap())); // IPv4-mapped
         assert!(!is_internal("8.8.8.8".parse().unwrap()));
+        assert!(!is_internal("100.128.0.1".parse().unwrap())); // just outside CGNAT
+    }
+
+    #[test]
+    fn disallowed_targets_block_internal_and_metadata() {
+        assert!(is_disallowed_target("169.254.169.254".parse().unwrap())); // cloud metadata
+        assert!(is_disallowed_target("127.0.0.1".parse().unwrap()));
+        assert!(is_disallowed_target("0.0.0.0".parse().unwrap()));
+        assert!(is_disallowed_target("::ffff:192.168.1.1".parse().unwrap()));
+        assert!(!is_disallowed_target("8.8.8.8".parse().unwrap()));
+        assert!(!is_disallowed_target("1.1.1.1".parse().unwrap()));
     }
 
     #[test]

@@ -14,9 +14,9 @@ pub mod tenant;
 pub mod vuln;
 
 pub use asset::{Asset, AssetType, Criticality, Exposure, Fingerprint};
-pub use finding::{Confidence, Finding, FindingSource};
+pub use finding::{Finding, FindingSource};
 pub use ids::{AssetId, FindingId, TenantId, UserId};
 pub use network::{Interface, MacAddr, Protocol, Service};
 pub use risk::{RiskBand, RiskInputs, RiskScore};
 pub use tenant::{Role, Tenant, User};
-pub use vuln::{Cvss, Epss, Severity, Vulnerability};
+pub use vuln::{Confidence, Cvss, Epss, Severity, Vulnerability};

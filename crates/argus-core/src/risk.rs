@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::asset::{Criticality, Exposure};
+use crate::vuln::Confidence;
 
 /// Qualitative risk band derived from a [`RiskScore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -63,6 +64,11 @@ pub struct RiskInputs {
     pub exposure: Exposure,
     /// Business criticality of the asset.
     pub criticality: Criticality,
+    /// Match confidence of the worst (score-driving) vulnerability, carried
+    /// into the [`RiskScore`] so a high score backed only by version-blind
+    /// matches reads as less certain. Defaults to [`Confidence::Medium`].
+    #[serde(default)]
+    pub confidence: Confidence,
 }
 
 /// A computed risk score with its qualitative band.
@@ -72,6 +78,11 @@ pub struct RiskScore {
     pub value: f32,
     /// Qualitative band.
     pub band: RiskBand,
+    /// Confidence in the score, inherited from the match confidence of the
+    /// highest-CVSS vulnerability that drives it. Defaults to
+    /// [`Confidence::Medium`] for scores persisted before this existed.
+    #[serde(default)]
+    pub confidence: Confidence,
 }
 
 /// Maximum attack-surface uplift on the base severity/likelihood blend: a
@@ -122,6 +133,7 @@ impl RiskScore {
         Self {
             value,
             band: RiskBand::from_value(value),
+            confidence: input.confidence,
         }
     }
 }
@@ -159,6 +171,7 @@ mod tests {
             high_vulns: 0,
             exposure,
             criticality,
+            confidence: Confidence::Confirmed,
         }
     }
 
@@ -182,6 +195,7 @@ mod tests {
             high_vulns: 0,
             exposure: Exposure::Internal,
             criticality: Criticality::Low,
+            confidence: Confidence::Confirmed,
         });
         assert!(s.value < f32::EPSILON);
         assert_eq!(s.band, RiskBand::Info);
@@ -197,6 +211,7 @@ mod tests {
             high_vulns: 1,
             exposure: Exposure::Internal,
             criticality: Criticality::Medium,
+            confidence: Confidence::High,
         };
         let with_kev = RiskInputs {
             kev_present: true,
@@ -225,6 +240,7 @@ mod tests {
             high_vulns: 0,
             exposure: Exposure::InternetFacing,
             criticality: Criticality::High,
+            confidence: Confidence::Confirmed,
         };
         let many = RiskInputs {
             critical_vulns: 30,
@@ -243,6 +259,7 @@ mod tests {
             high_vulns: 0,
             exposure: Exposure::InternetFacing,
             criticality: Criticality::High,
+            confidence: Confidence::Confirmed,
         };
         let forty = RiskScore::compute(&mk(40)).value;
         let twohundred = RiskScore::compute(&mk(200)).value;
@@ -263,6 +280,7 @@ mod tests {
             high_vulns: 3,
             exposure: Exposure::InternetFacing,
             criticality: Criticality::High,
+            confidence: Confidence::Confirmed,
         };
         let two_crit = RiskInputs {
             critical_vulns: 2,

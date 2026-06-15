@@ -6,18 +6,26 @@ platform that continuously discovers, identifies, scores and monitors every asse
 Argus mirrors the *architecture* of enterprise platforms like Armis Centrix™ and runZero,
 built entirely on open-source data and tooling. It is **not** affiliated with Armis.
 
-> Status: **P1 spine + SaaS foundation + Console v2** — discovery, CVE correlation, risk
-> scoring, continuous monitoring and a fully built console (overview, assets, network,
-> vulnerabilities, risk, settings) work end-to-end behind JWT/API-key auth with tenant
-> isolation and RBAC. See [`ROADMAP.md`](ROADMAP.md) and the design spec under
+> Status: **P1 spine + SaaS foundation + Console v2** — discovery, CVE
+> correlation, match-confidence-aware risk scoring, continuous monitoring and a
+> fully built console (overview, assets, network, vulnerabilities, risk,
+> settings) work end-to-end behind JWT/API-key auth with tenant isolation and
+> RBAC. Scans are restricted to public targets by default (SSRF-safe);
+> self-hosted deployments opt into internal scanning. See
+> [`ROADMAP.md`](ROADMAP.md) and the design spec under
 > [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## What it does (target)
 
-- **Discover** assets via active scanning (runZero-style, OT-safe) and later passive sensing
-- **Identify** devices via open fingerprint data (Fingerbank/OUI/Nmap/p0f) + a trained classifier
-- **Correlate** vulnerabilities (NVD CPE + EPSS + CISA KEV)
-- **Score** per-asset exposure/risk
+- **Discover** assets via active scanning — a payload-free TCP-connect scan
+  (safe for fragile/OT gear) plus optional nmap/masscan engines, and later
+  passive sensing. Raw SYN sweeping (masscan) is opt-in and not OT-safe.
+- **Identify** devices via open fingerprint data (OUI/Nmap/CPE) and a
+  **heuristic** classifier today; a trained classifier (Fingerbank-style
+  features) is planned, not built.
+- **Correlate** vulnerabilities (NVD CPE + EPSS + CISA KEV), each tagged with a
+  **match confidence** (CPE + version vs. version-blind) that flows into the score.
+- **Score** per-asset exposure/risk, carrying the driving match's confidence.
 - **Visualize** everything in a real-time web console (asset graph, dashboards)
 
 ## Architecture
@@ -30,7 +38,7 @@ crates/
   argus-core         # domain model + risk scoring
   argus-discovery    # active discovery (nmap/masscan/arp-scan)   [P1]
   argus-vuln         # CVE correlation, live NVD/EPSS/KEV intel   [P1/P3]
-  argus-intel        # device classification                      [P1]
+  argus-intel        # heuristic device classification            [P1]
   argus-report       # exposure / posture reports                 [P3]
   argus-policy       # advisory segmentation rules                [P3]
   argus-api          # axum HTTP, Postgres, auth, multi-tenant    [P0..P3]
@@ -45,7 +53,13 @@ passwords → HS256 JWT sessions, or hashed `x-api-key` machine credentials),
 every query is scoped to the caller's tenant, and roles
 (`viewer`/`analyst`/`admin`) gate scans, imports and administration. Logins,
 scans, imports and credential changes land in a per-tenant audit log.
-Deployment hardening (TLS, secrets, CORS): see [`DEPLOY.md`](DEPLOY.md).
+
+Scan targets are restricted to **public** addresses by default, so a hosted
+server cannot be steered into probing internal / loopback / cloud-metadata
+ranges (SSRF). The in-memory dev store opts in automatically; self-hosted
+operators set `ARGUS_SCAN_ALLOW_PRIVATE=true` to scan their own LAN.
+Self-service signup is **off** by default (`ARGUS_SIGNUP_ENABLED=true` to open
+it). Deployment hardening (TLS, secrets, CORS): see [`DEPLOY.md`](DEPLOY.md).
 
 ## Development
 

@@ -38,6 +38,33 @@ impl Severity {
     }
 }
 
+/// Confidence in an observation or correlation, ordered
+/// `Low < Medium < High < Confirmed`.
+///
+/// For a [`Vulnerability`] this expresses *how* the CVE was matched to the
+/// asset, so a high risk score backed only by weak matches is visibly less
+/// certain:
+/// - `Confirmed` — live NVD, precise CPE identity, observed version matched
+///   against NVD's published version range,
+/// - `High` — catalog match with the observed version inside an explicit
+///   version range,
+/// - `Medium` — precise CPE identity but no version was checked,
+/// - `Low` — version-blind (a product-token or all-versions match, e.g. a
+///   protocol-level CVE that applies regardless of version).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    /// Weak / version-blind signal.
+    Low,
+    /// Moderate signal (the neutral default for untracked data).
+    #[default]
+    Medium,
+    /// Strong signal.
+    High,
+    /// Verified / confirmed.
+    Confirmed,
+}
+
 /// CVSS base score and (optional) vector string.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cvss {
@@ -52,8 +79,10 @@ pub struct Cvss {
 pub struct Epss {
     /// Probability of exploitation in the next 30 days, `0.0..=1.0`.
     pub score: f32,
-    /// Percentile rank among all scored CVEs, `0.0..=1.0`.
-    pub percentile: f32,
+    /// Percentile rank among all scored CVEs, `0.0..=1.0`, when known. `None`
+    /// for offline-catalog entries, which carry an approximate score but no
+    /// percentile.
+    pub percentile: Option<f32>,
 }
 
 /// A vulnerability affecting one or more assets.
@@ -69,6 +98,12 @@ pub struct Vulnerability {
     pub kev: bool,
     /// Qualitative severity.
     pub severity: Severity,
+    /// How reliably this CVE was matched to the asset (CPE + version vs.
+    /// version-blind). Aggregated into the asset's [`crate::RiskScore`]
+    /// confidence. Defaults to [`Confidence::Medium`] for data persisted
+    /// before match-confidence tracking existed.
+    #[serde(default)]
+    pub match_confidence: Confidence,
 }
 
 #[cfg(test)]
@@ -99,10 +134,11 @@ mod tests {
             }),
             epss: Some(Epss {
                 score: 0.94,
-                percentile: 0.99,
+                percentile: Some(0.99),
             }),
             kev: true,
             severity: Severity::Critical,
+            match_confidence: Confidence::Confirmed,
         };
         let json = serde_json::to_string(&v).unwrap();
         let back: Vulnerability = serde_json::from_str(&json).unwrap();

@@ -16,6 +16,8 @@ import {
 import { useAuth } from "@/lib/auth";
 import {
   assetTypeLabel,
+  confidenceHint,
+  confidenceLabel,
   exposureLabel,
   formatCvss,
   formatEpss,
@@ -212,7 +214,11 @@ export function AssetDrawer({
         <Detail label="IP" value={dash(iface?.ip)} mono />
         <Detail label="MAC" value={dash(iface?.mac)} mono />
         <Detail label="Hostname" value={dash(iface?.hostname)} mono />
-        <Detail label="Confidence" value={`${fp.confidence}%`} />
+        <Detail label="ID confidence" value={`${fp.confidence}%`} />
+        <Detail
+          label="Risk confidence"
+          value={confidenceLabel[asset.risk.confidence]}
+        />
       </div>
 
       <BusinessContext key={asset.id} asset={asset} onUpdated={onUpdated} />
@@ -290,6 +296,12 @@ export function AssetDrawer({
                     EPSS {formatEpss(v.epss.score)}
                   </span>
                 ) : null}
+                <span
+                  className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
+                  title={confidenceHint[v.match_confidence]}
+                >
+                  {confidenceLabel[v.match_confidence]}
+                </span>
                 {v.kev ? (
                   <span className="ml-auto">
                     <Badge tone="danger">KEV</Badge>

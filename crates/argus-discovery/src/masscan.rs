@@ -16,8 +16,11 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-/// Default sweep rate in packets/second — conservative enough to stay OT-safe on
-/// shared/internal networks while still far faster than the connect scanner.
+/// Default sweep rate in packets/second — faster than the connect scanner.
+///
+/// A moderate default, but raw SYN sweeping at any rate is **not** guaranteed
+/// safe for fragile OT/ICS devices. Lower the rate for sensitive segments, or
+/// avoid masscan entirely there and use the payload-free connect scanner.
 pub const DEFAULT_RATE: u32 = 1_000;
 
 /// Errors from running masscan. Parse failures are intentionally absent: the

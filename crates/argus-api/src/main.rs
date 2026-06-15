@@ -51,6 +51,11 @@ pub struct AppState {
     pub limiter: Arc<LoginLimiter>,
     /// Whether `POST /api/auth/register` is open (`ARGUS_SIGNUP_ENABLED`).
     pub signup_enabled: bool,
+    /// Whether scans may target private/internal ranges
+    /// (`ARGUS_SCAN_ALLOW_PRIVATE`). Off by default on Postgres so a hosted,
+    /// multi-tenant server cannot be used to probe internal networks (SSRF);
+    /// on for the in-memory dev store so local loopback scans still work.
+    pub scan_allow_private: bool,
     /// Per-tenant ingest serialization (manual scans vs. scheduled runs).
     pub ingest_locks: IngestLocks,
     /// Cached live vulnerability intelligence (NVD / CISA KEV / EPSS).
@@ -71,16 +76,23 @@ async fn main() {
 
     let ingest_locks = IngestLocks::default();
     let intel = IntelCache::from_env();
+    // Private/internal scanning defaults on for the ephemeral dev store and off
+    // for Postgres (a hosted deployment); always overridable explicitly.
+    let scan_allow_private = env_flag(
+        "ARGUS_SCAN_ALLOW_PRIVATE",
+        matches!(store, Store::Memory(_)),
+    );
     let state = AppState {
         store,
         keys: AuthKeys::from_secret(&auth::load_or_generate_secret()),
         limiter: Arc::new(LoginLimiter::default()),
-        signup_enabled: env_flag("ARGUS_SIGNUP_ENABLED", true),
+        signup_enabled: env_flag("ARGUS_SIGNUP_ENABLED", false),
+        scan_allow_private,
         ingest_locks: ingest_locks.clone(),
         intel: intel.clone(),
     };
 
-    spawn_scheduler(state.store.clone(), ingest_locks, intel);
+    spawn_scheduler(state.store.clone(), ingest_locks, intel, scan_allow_private);
 
     let app = router(state);
     let bind = std::env::var("ARGUS_BIND").unwrap_or_else(|_| "127.0.0.1:8088".to_owned());
@@ -426,12 +438,44 @@ struct Discovery {
     candidates: usize,
 }
 
+/// Reject a scan whose target expands to any private/internal/special address
+/// unless the deployment explicitly allows internal scanning. Stops a hosted,
+/// multi-tenant server from being used as an internal-network pivot (SSRF).
+pub(crate) fn reject_private_targets(
+    ips: &[std::net::IpAddr],
+    allow_private: bool,
+) -> Result<(), (StatusCode, String)> {
+    if allow_private {
+        return Ok(());
+    }
+    if let Some(ip) = ips
+        .iter()
+        .find(|ip| argus_discovery::is_disallowed_target(**ip))
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "target {ip} is in a private/internal range; this server only scans public \
+                 addresses. Set ARGUS_SCAN_ALLOW_PRIVATE=true to scan internal networks \
+                 (on-prem / self-hosted)."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Expand `target` and run discovery with the best available engine: the
 /// privileged deep path (masscan sweep + nmap SYN/OS, needs root) when
 /// requested, else nmap when installed, else the built-in connect scanner.
 /// Shared by `POST /api/scan` and the monitor scheduler.
-async fn discover(target: &str, deep: bool) -> Result<Discovery, argus_discovery::TargetError> {
-    let ips = argus_discovery::expand(target)?;
+async fn discover(
+    target: &str,
+    deep: bool,
+    allow_private: bool,
+) -> Result<Discovery, (StatusCode, String)> {
+    let ips =
+        argus_discovery::expand(target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    reject_private_targets(&ips, allow_private)?;
 
     // Deep scan first when requested. Best-effort — an empty result
     // (unprivileged, or nothing live) falls through to the standard
@@ -513,9 +557,7 @@ async fn run_scan(
     let deep = req.deep.unwrap_or(false);
 
     let started = Instant::now();
-    let discovery = discover(&target, deep)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let discovery = discover(&target, deep, state.scan_allow_private).await?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let Discovery {
@@ -698,7 +740,12 @@ const PRUNE_EVERY_TICKS: u64 = 120;
 /// `UPDATE .. RETURNING` (or the equivalent under the memory mutex), multiple
 /// replicas remain best-effort safe: each due monitor is claimed by at most
 /// one replica per interval.
-fn spawn_scheduler(store: Store, ingest_locks: IngestLocks, intel: IntelCache) {
+fn spawn_scheduler(
+    store: Store,
+    ingest_locks: IngestLocks,
+    intel: IntelCache,
+    allow_private: bool,
+) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         let semaphore = Arc::new(tokio::sync::Semaphore::new(SCHEDULER_CONCURRENCY));
@@ -731,7 +778,8 @@ fn spawn_scheduler(store: Store, ingest_locks: IngestLocks, intel: IntelCache) {
                     // Acquire a permit inside the task so the tick loop never
                     // blocks; the permit drops when the task ends.
                     let _permit = semaphore.acquire_owned().await;
-                    run_scheduled_scan(&store, &ingest_locks, &intel, &claimed).await;
+                    run_scheduled_scan(&store, &ingest_locks, &intel, &claimed, allow_private)
+                        .await;
                 });
             }
         }
@@ -745,11 +793,10 @@ async fn run_scheduled_scan(
     ingest_locks: &IngestLocks,
     intel: &IntelCache,
     claimed: &db::DueMonitor,
+    allow_private: bool,
 ) {
     let result = async {
-        let discovery = discover(&claimed.target, claimed.deep)
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        let discovery = discover(&claimed.target, claimed.deep, allow_private).await?;
         let (live, changes) = ingest(
             store,
             ingest_locks,
@@ -848,8 +895,8 @@ async fn import_nmap(
 #[cfg(test)]
 mod tests {
     use argus_core::{
-        Asset, AssetId, AssetType, Criticality, Cvss, Exposure, Fingerprint, Protocol, RiskBand,
-        RiskScore, Service, Severity, Vulnerability,
+        Asset, AssetId, AssetType, Confidence, Criticality, Cvss, Exposure, Fingerprint, Protocol,
+        RiskBand, RiskScore, Service, Severity, Vulnerability,
     };
     use argus_vuln::intel::Enrichment;
     use time::OffsetDateTime;
@@ -866,6 +913,7 @@ mod tests {
             epss: None,
             kev,
             severity: Severity::from_cvss(cvss),
+            match_confidence: Confidence::High,
         }
     }
 
@@ -892,6 +940,7 @@ mod tests {
             risk: RiskScore {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
+                confidence: Confidence::High,
             },
             overrides: crate::seed::AssetOverrides::default(),
         }

@@ -1,118 +1,123 @@
 # Argus Roadmap
 
-Tracking the phased build from the design spec. Checkboxes are the live task list.
+**North star:** a *deployable, multi-tenant SaaS* exposure-management platform.
+Every goal below is judged against "can a hosted operator run this safely for
+real tenants?" — not demo polish. Checkboxes are the live task list.
 
-**Status (2026-06-11):** P0 + P1 complete and verified — a working, persistent,
-CVE-correlating CAASM / exposure-management platform with a polished console —
-plus the SaaS foundation from P3: authentication (Argon2 + JWT + API keys),
-enforced multi-tenancy (tenant-scoped schema + queries), RBAC, audit log,
-login/signup console flow and hardened CORS. The first P2 capability —
-**continuous monitoring + change detection** — is in: scheduled per-tenant
-re-scans that diff against the stored inventory and surface a change-event
-feed in the console. **Console v2** landed on top: a professional redesign
-(design tokens, shared UI primitives, labeled sidebar, functional global
-search) and the three remaining placeholder pages are now real —
-Vulnerabilities (backed by a new tenant-wide `GET /api/vulns` CVE
-aggregation), Network (subnet-grouped inventory) and Risk (distribution,
-top-risk assets, risk-change history). Vulnerability intelligence is now
-**live and CPE-grounded**: nmap CPEs are captured per service, NVD is queried
-per product and matched against its published version constraints, with
-KEV/EPSS overlays — all cached process-wide behind an NVD rate-limit gate
-(see P3). The remaining P2 / P3 work (passive sensing, trained classifier,
-connectors, policy/reporting, billing) is multi-week.
+## Status (2026-06-15)
 
-## P0 — Foundations ✅
-- [x] Repo + design spec
-- [x] Prior-art research folded into spec
+A working, persistent, CVE-correlating CAASM platform with a polished console:
+P0 + P1 (discovery → correlation → risk) and the P3 SaaS foundation
+(Argon2id + JWT + API keys, enforced multi-tenancy, RBAC, audit log) are done
+and verified. Continuous monitoring (scheduled re-scans + change feed) and
+**Console v2** (design system, real vulns/network/risk/policy/report pages) are
+in. Vulnerability intelligence is live and CPE-grounded (NVD version-matched +
+KEV + EPSS, cached). Risk scoring now carries a **match confidence** so a high
+score backed only by version-blind matches is visibly less certain.
+
+What is explicitly **not** done: this is a P1 analytical spine, not a finished
+product. Scoring weights are an honest heuristic, not a calibrated model; the
+offline catalog is a ~40-CVE baseline; the device classifier is heuristic
+(no trained model); there is no passive sensing, no connectors, no billing, and
+the central scanner reaches targets directly (no agent/relay model yet).
+
+---
+
+## Done
+
+### P0 — Foundations ✅
 - [x] Cargo workspace + `argus-core` domain model (tenants, assets, network, vuln, findings, risk)
-- [x] `argus-api` (axum: `/health`, `/api/assets`, `/api/assets/{id}`, `/api/summary`, `/api/scan`)
-- [x] `web/` Next.js console: dark design system + dashboard wired to the API
-- [x] Postgres schema + persistence (sqlx, JSONB document store)
+- [x] `argus-api` (axum) + Postgres schema/persistence (sqlx, JSONB document store) + in-memory backend
+- [x] `web/` Next.js console wired to the API
 - [x] CI (GitHub Actions: fmt + clippy + test + web lint/build)
 
-## P1 — Spine (demo-able, real) ✅
-- [x] `argus-discovery` (light): safe TCP-connect host/service scan + heuristic + range cap + CLI
+### P1 — Spine (demo-able, real) ✅
+- [x] `argus-discovery` (light): payload-free TCP-connect scan + heuristic + range cap + CLI
 - [x] `argus-discovery` (deep, no-root): nmap service/version fingerprints, MAC + OUI vendor (ARP), subnet sampling
-- [x] inventory + `POST /api/scan` → discovery → dedup-upsert, Postgres-persisted
-- [x] `argus-vuln`: CVE correlation (catalog + version matching) → CVSS / EPSS / KEV → risk inputs
-- [x] `argus-risk`: composite exposure score on every asset (seed + discovered)
-- [x] web: metrics, risk distribution, SVG asset map, device-detail drawer with CVEs, Run-scan wiring, table CVE indicators
-- [x] `argus-discovery` (deep, root): masscan high-speed sweep + `nmap -sS -O` OS detection, wired into `POST /api/scan` via `{"deep":true}` (needs root)
+- [x] `argus-discovery` (deep, root): masscan SYN sweep + `nmap -sS -O`, wired via `{"deep":true}`
+- [x] `argus-vuln`: CVE correlation (catalog + version matching) → CVSS/EPSS/KEV → risk inputs
+- [x] `argus-core::risk`: composite exposure score on every asset
+- [x] `POST /api/scan` → discovery → dedup-upsert, Postgres-persisted
 
-## P2 — Intelligence (remaining vision)
+### P3 — SaaS foundation ✅
+- [x] Auth: Argon2id passwords, HS256 JWT sessions, hashed API keys, two-axis login rate limit
+- [x] Multi-tenancy enforced: tenant-scoped schema + every query; `tenant_id` only from the session, never client input
+- [x] RBAC (`viewer`/`analyst`/`admin`) on every mutating route + per-tenant audit log
+- [x] Console v2: design tokens + shared UI primitives, labeled sidebar, global search, a11y pass; all pages real (overview, assets, network, vulns, risk, policy, reports, settings)
+- [x] `argus-policy`: advisory segmentation rules (`GET /api/policy`)
+- [x] `argus-report`: exposure/posture reports, print-ready (`GET /api/report?days=1..90`)
+- [x] IR workflow v1: per-(asset, CVE) finding triage + bulk triage
+- [x] Continuous monitoring + change detection: scheduled re-scans, atomic claim, bounded concurrency, change-event feed (`GET /api/events`)
+
+### P3 — Live intelligence ✅
+- [x] CPE-grounded NVD matching: nmap CPEs per service, NVD queried by `vendor:product`, matched against published version constraints; KEV/EPSS overlays; process-wide TTL cache with rate-limit gate and disk snapshot
+
+### Hardening pass (2026-06-15) ✅
+- [x] **Match confidence**: every `Vulnerability` carries `match_confidence` (`confirmed` CPE+version → `high` catalog+version → `medium` CPE-only → `low` version-blind); `RiskScore` inherits the confidence of its highest-CVSS driver; surfaced per CVE and per asset in the console. Resolves the "honest confidence" gap by building it.
+- [x] **CVSS extraction fix**: `extract_cvss` now takes the **max** base score across NVD metric entries (was an arbitrary first entry), so the risk engine is never silently under-scored.
+- [x] **EPSS percentile fix**: real percentile parsed from FIRST.org and carried through; the catalog reports `percentile: None` instead of a wrong value.
+- [x] **SSRF guard**: scan/monitor targets are restricted to public addresses (`is_disallowed_target` blocks RFC1918/loopback/link-local/CGNAT/metadata/IPv4-mapped); `ARGUS_SCAN_ALLOW_PRIVATE` opts in (auto-on for the dev store, off for Postgres).
+- [x] **Signup default off**: `ARGUS_SIGNUP_ENABLED` defaults to `false` (was open).
+- [x] **`is_internal` fix**: CGNAT (`100.64.0.0/10`) and IPv4-mapped IPv6 are correctly classified — stops false "internet-facing" exposure (which fed false-positive policy advisories).
+- [x] **Honest "OT-safe" claim**: the payload-free connect scanner is safe; masscan's raw SYN sweep is explicitly labeled *not* OT-safe.
+- [x] Docs (README/ROADMAP) aligned with the code: `argus-intel` is a heuristic classifier, not a trained one.
+
+---
+
+## Next — SaaS production-readiness (the north-star track)
+
+Ordered by what blocks running this for real tenants. Each has a done-criterion.
+
+- [ ] **Scan delivery model for hosted SaaS.** The central server must not scan
+      networks directly for tenants (the SSRF guard is a stopgap, not an
+      architecture). Introduce a tenant-deployed **agent/relay** that scans the
+      tenant's own network and pushes results, or scope direct scans to
+      operator-verified asset ownership.
+      *Done when:* a tenant can inventory an internal network without the
+      central API ever connecting to a private address.
+- [ ] **Session cookies instead of `localStorage` JWT.** Move the bearer token
+      to a `HttpOnly; Secure; SameSite` cookie with CSRF double-submit (the
+      console and API are cross-origin, so this needs `SameSite=None` + an
+      anti-CSRF token). *Done when:* no JWT is readable from JS and CSRF is
+      covered by a test.
+- [ ] **NVD enrichment concurrency.** The rate-limit gate currently serializes
+      *all* product fetches process-wide (one slow product blocks every
+      tenant). Replace the global `await`-held mutex with a per-product
+      single-flight + a token-bucket limiter. *Done when:* a 4000-CVE product
+      fetch does not stall other tenants' enrichment.
+- [ ] **Horizontal scale.** Login rate limiter and the monitor scheduler are
+      single-instance (in-memory limiter; atomic DB claim is replica-safe but
+      the limiter is not). Back the limiter with Postgres/Redis. *Done when:*
+      two API replicas share rate-limit and scheduler state.
+- [ ] **Billing & plans** (`argus-api`): per-tenant plan, asset/seat limits
+      enforced on ingest and user/key creation, usage metering. *Done when:* a
+      tenant over its asset cap is rejected at ingest with a clear error.
+- [ ] **Scheduled report delivery** (email/webhook) + per-framework compliance
+      mappings on top of `argus-report`.
+
+## Quality bar (cross-cutting, do alongside)
+
+- [ ] **Integration/e2e tests.** Current tests are high-quality unit tests, but
+      nothing spawns nmap/masscan or hits real Postgres end-to-end. Add a
+      Postgres-backed API test (testcontainers) and a scan-pipeline test against
+      a stub target. *Done when:* CI runs at least one full ingest against real
+      Postgres.
+- [ ] **Frontend data layer**: collapse the five near-identical polling hooks
+      into one `usePolledResource<T>`; add `AbortController` + an in-flight
+      sequence guard so slow polls can't show stale data; pause polling on
+      hidden tabs; `aria-live` on the live regions.
+- [ ] **Match confidence in the aggregation view**: surface per-CVE confidence
+      on the Vulnerabilities page (`GET /api/vulns`), not just the asset drawer.
+- [ ] **Scoring calibration**: the risk weights are an opinionated heuristic.
+      Either keep them and label the score "heuristic" in the UI, or calibrate
+      against a reference distribution. Do not call it a model until then.
+
+## P2 — Intelligence (vision, not yet built)
+
+- [ ] `argus-intel`: a *trained* device classifier (Fingerbank-style features) —
+      today's classifier is heuristic rules and is labeled as such.
 - [ ] `argus-sensor`: passive sensing (p0f/Zeek-style signatures)
-- [ ] `argus-intel`: trained device classifier (Fingerbank features)
-- [ ] `argus-connectors`: cloud/AD/NetBox adapters (Axonius adapter pattern)
-- [x] continuous monitoring + change detection: per-tenant scheduled re-scans
-      (background scheduler, bounded concurrency, atomic due-monitor claim),
-      asset-level diff (`asset.new` / `services.changed` / `vulns.changed` /
-      `risk.changed`), a persisted change-event feed (`GET /api/events`),
-      monitor config (`GET`/`POST /api/monitor`), and the console activity feed
-      + monitor settings. Enrichment is non-regressive, so a feed outage can't
-      spam false change events.
+- [ ] `argus-connectors`: cloud/AD/NetBox adapters (also the real source of
+      VLAN/switch telemetry that would replace the policy engine's `/24` zone
+      approximation)
 - [ ] `argus-behavior`: per-deployment anomaly baselines
-
-## P3 — Enterprise / SaaS
-- [x] Authentication: Argon2id passwords, HS256 JWT sessions, hashed API keys, login rate limit
-- [x] Multi-tenancy enforced: sqlx migrations, tenant-scoped assets/users/keys, self-service tenant signup
-- [x] RBAC (`viewer`/`analyst`/`admin`) on every route + per-tenant audit log
-- [x] Console: login/signup page, session handling, user & API-key management (Settings)
-- [x] Console v2: professional redesign — design-token system + shared UI
-      primitives (`web/src/components/ui.tsx`), labeled navy sidebar with
-      sections, mobile slide-over nav, functional global search (`/assets?q=`),
-      a11y pass (focus rings, dialog/switch semantics) — and all placeholder
-      pages completed: Vulnerabilities (new tenant-wide `GET /api/vulns`
-      aggregation: severity/CVSS/EPSS maxima, KEV-first ordering, affected
-      assets), Network (subnet-grouped host grid), Risk (distribution,
-      top-10 assets, risk-change feed)
-- [x] `argus-policy`: advisory segmentation — pure rule evaluator over the
-      inventory (`argus_policy::evaluate`): KEV × internet-facing, exposed
-      management/database ports (criticality split mirrors the discovery
-      port taxonomy), internet-reachable ICS protocols, internet-facing
-      IoT/IoMT, OT/IT mixed /24 zones (Purdue rationale), clear-text legacy
-      protocols, high-value assets in IoT-noisy zones, flat-network
-      heuristic. Served as `GET /api/policy` (sorted critical-first) and
-      rendered as advisory cards (rationale + recommendation + affected
-      evidence) on the console's Segmentation page. Zones are IPv4-/24
-      approximations until switch/VLAN telemetry exists (connectors).
-- [x] `argus-report`: exposure / posture reports — pure, IO-free report
-      builder (`argus_report::build`: executive-summary highlights, inventory
-      breakdowns, risk distribution + top-10 assets, CVE posture with
-      KEV→EPSS→CVSS-ranked top-10, period activity from change events,
-      monitoring coverage), served as `GET /api/report?days=1..90` and
-      rendered print-ready on the console's Reports page (browser
-      print-to-PDF, `@media print` isolates the report sheet). Remaining:
-      scheduled report delivery (e-mail/webhook), per-framework compliance
-      mappings.
-- [x] IR workflow v1 — finding triage: analyst-set lifecycle status per
-      (asset, CVE) finding (`acknowledged` / `resolved` / `false_positive`
-      + note, `open` = default), keyed by the stable asset id so decisions
-      survive re-scans. New `finding_status` table (+ in-memory twin),
-      `POST /api/findings` (analyst role, validates the finding exists,
-      audited), status embedded per affected asset in `GET /api/vulns`, and
-      triage controls in the CVE drawer (status select + note, viewer sees
-      read-only state). Deliberate v1 semantics: triage is metadata only —
-      it does not alter the computed risk score. Bulk triage applies one
-      decision to every affected asset of a CVE in one call
-      (`POST /api/findings/bulk`, single-statement upsert on Postgres,
-      assets that no longer carry the CVE are skipped + reported, one audit
-      row per action) behind an explicit Apply control in the drawer. A
-      `resolved` finding whose asset is re-scanned *after* the decision and
-      still carries the CVE is flagged "resolved but still detected"
-      (computed server-side from `last_seen` vs. the decision time) in the
-      table row and per affected asset. Remaining: billing fields.
-- [x] `argus-vuln` live NVD + EPSS + CISA-KEV intelligence: nmap application
-      CPEs captured per service (`Service.cpe`), NVD queried by
-      `virtualMatchString` per vendor:product and matched locally against the
-      version constraints NVD publishes in `configurations` (no more
-      version-blind keyword hits), all behind a process-wide TTL cache
-      (`intel::IntelCache`: KEV 12 h, EPSS 24 h, NVD 7 d) with an NVD
-      rate-limit gate (`NVD_API_KEY` lifts 5→50 req/30 s). The curated seed
-      catalog remains the offline baseline; CPE-less services correlate
-      against it only. Verified end-to-end against the live feeds
-      (OpenSSH 8.9p1 → 18 version-relevant CVEs incl. regreSSHion).
-      NVD lookups follow pagination past the 2000-per-page limit (capped at
-      10 000 CVEs/product, cap hits logged), and the cache snapshots to disk
-      (`ARGUS_INTEL_CACHE`, atomic write, TTL-checked on restore) so restarts
-      no longer start cold.
-- [ ] animation polish + performance pass

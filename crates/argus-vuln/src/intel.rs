@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use argus_core::{Cvss, Epss, Service, Vulnerability};
+use argus_core::{Confidence, Cvss, Epss, Service, Vulnerability};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
@@ -54,8 +54,9 @@ const MAX_EPSS: usize = 8192;
 /// hitting it is logged so truncation is never silent.
 const MAX_NVD_RESULTS: u64 = 10_000;
 /// On-disk snapshot format version — bump on layout changes so an old file
-/// is discarded instead of misparsed.
-const DISK_VERSION: u32 = 1;
+/// is discarded instead of misparsed. v2: EPSS entries store score +
+/// percentile (was a bare score); vulns carry a match-confidence field.
+const DISK_VERSION: u32 = 2;
 
 /// A cached value plus the wall-clock time it was stored. Wall-clock (not
 /// `Instant`) so stamps survive serialization across restarts; a clock that
@@ -252,6 +253,9 @@ fn parse_nvd_item(item: &serde_json::Value, vendor: &str, product: &str) -> Opti
             epss: None,
             kev: false,
             severity,
+            // Refined per match in `enrich_inner` (Confirmed/Medium); this
+            // cached placeholder is never surfaced directly.
+            match_confidence: Confidence::Medium,
         },
         constraints,
     })
@@ -277,7 +281,7 @@ fn matching<'c>(
 struct DiskCache {
     version: u32,
     kev: Option<Stamp<HashSet<String>>>,
-    epss: HashMap<String, Stamp<Option<f32>>>,
+    epss: HashMap<String, Stamp<Option<nvd::EpssScore>>>,
     products: HashMap<String, Stamp<Vec<ProductCve>>>,
 }
 
@@ -289,9 +293,9 @@ struct Inner {
     kev: RwLock<Option<Stamp<Arc<HashSet<String>>>>>,
     /// Single-flight guard so concurrent ingests refresh KEV once, not N times.
     kev_refresh: Mutex<()>,
-    /// Per-CVE EPSS scores; `None` records a known-absent score so repeated
+    /// Per-CVE EPSS data; `None` records a known-absent score so repeated
     /// scans do not re-ask for CVEs EPSS has never heard of.
-    epss: RwLock<HashMap<String, Stamp<Option<f32>>>>,
+    epss: RwLock<HashMap<String, Stamp<Option<nvd::EpssScore>>>>,
     /// Per-`vendor:product` NVD CVE sets.
     products: RwLock<HashMap<String, Stamp<Arc<Vec<ProductCve>>>>>,
     /// Paces NVD requests to the rate limit and doubles as the single-flight
@@ -486,7 +490,22 @@ impl IntelCache {
                 Some(cves) => {
                     for hit in matching(&cves, observed.as_deref()) {
                         if !vulns.iter().any(|v| v.cve_id == hit.vuln.cve_id) {
-                            vulns.push(hit.vuln.clone());
+                            let mut v = hit.vuln.clone();
+                            // Confirmed when the observed version matched a real
+                            // published range; otherwise precise CPE identity
+                            // without a version check (Medium).
+                            v.match_confidence = match observed.as_deref() {
+                                Some(ver)
+                                    if hit
+                                        .constraints
+                                        .iter()
+                                        .any(|c| !c.unbounded() && c.contains(ver)) =>
+                                {
+                                    Confidence::Confirmed
+                                }
+                                _ => Confidence::Medium,
+                            };
+                            vulns.push(v);
                         }
                     }
                 }
@@ -511,10 +530,10 @@ impl IntelCache {
         match self.epss(&ids).await {
             Some(scores) => {
                 for v in &mut vulns {
-                    if let Some(&score) = scores.get(&v.cve_id) {
+                    if let Some(&nvd::EpssScore { score, percentile }) = scores.get(&v.cve_id) {
                         v.epss = Some(Epss {
                             score,
-                            percentile: score,
+                            percentile: Some(percentile),
                         });
                     }
                 }
@@ -553,7 +572,7 @@ impl IntelCache {
     /// EPSS scores for `ids` (cache first, batched fetch for the rest).
     /// `None` if any required fetch failed; ids EPSS does not know are simply
     /// absent from the result.
-    async fn epss(&self, ids: &[String]) -> Option<HashMap<String, f32>> {
+    async fn epss(&self, ids: &[String]) -> Option<HashMap<String, nvd::EpssScore>> {
         let mut known = HashMap::new();
         let mut missing: Vec<String> = Vec::new();
         {
@@ -914,6 +933,7 @@ mod tests {
                 epss: None,
                 kev: false,
                 severity: Severity::High,
+                match_confidence: Confidence::Medium,
             },
             constraints: vec![VersionConstraint {
                 end_excluding: Some("9.8".into()),
@@ -927,6 +947,7 @@ mod tests {
                 epss: None,
                 kev: false,
                 severity: Severity::Medium,
+                match_confidence: Confidence::Medium,
             },
             constraints: vec![VersionConstraint::default()],
         };
@@ -985,6 +1006,7 @@ mod tests {
                 epss: None,
                 kev: false,
                 severity: Severity::High,
+                match_confidence: Confidence::Medium,
             },
             constraints: vec![VersionConstraint::default()],
         }
@@ -998,12 +1020,13 @@ mod tests {
             "acme:widget".into(),
             Stamp::new(Arc::new(vec![product_cve("CVE-2024-1")])),
         );
-        cache
-            .inner
-            .epss
-            .write()
-            .await
-            .insert("CVE-2024-1".into(), Stamp::new(Some(0.5)));
+        cache.inner.epss.write().await.insert(
+            "CVE-2024-1".into(),
+            Stamp::new(Some(crate::nvd::EpssScore {
+                score: 0.5,
+                percentile: 0.8,
+            })),
+        );
         *cache.inner.kev.write().await = Some(Stamp::new(Arc::new(HashSet::from([
             "CVE-2024-1".to_owned()
         ]))));
@@ -1029,7 +1052,10 @@ mod tests {
                 .await
                 .get("CVE-2024-1")
                 .map(|s| s.value),
-            Some(Some(0.5))
+            Some(Some(crate::nvd::EpssScore {
+                score: 0.5,
+                percentile: 0.8,
+            }))
         );
     }
 

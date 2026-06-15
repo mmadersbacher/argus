@@ -2,7 +2,7 @@
 // Class strings are written as literals so the Tailwind v4 scanner picks them up.
 
 import type { IconName } from "@/components/icon";
-import type { AssetType, Exposure, RiskBand } from "./api";
+import type { AssetType, Confidence, Exposure, RiskBand } from "./api";
 
 export interface BandStyle {
   label: string;
@@ -37,6 +37,24 @@ export const exposureLabel: Record<Exposure, string> = {
   internal: "Internal",
   internet_facing: "Internet-facing",
   unknown: "Unknown",
+};
+
+/** Short label for a match/score confidence; `low` reads as "version-blind"
+ *  in the vulnerability context, where that is the actionable meaning. */
+export const confidenceLabel: Record<Confidence, string> = {
+  confirmed: "Confirmed",
+  high: "High",
+  medium: "Medium",
+  low: "Version-blind",
+};
+
+/** Tooltip explaining what a vulnerability's match confidence means. */
+export const confidenceHint: Record<Confidence, string> = {
+  confirmed:
+    "Live NVD match — product CPE and the observed version were both verified.",
+  high: "Catalog match with the observed version inside an explicit range.",
+  medium: "Product identity matched, but the version was not verified.",
+  low: "Matched on product name only — version not checked, so it may not apply.",
 };
 
 /** Icon tile per asset type — shared by the assets, network and risk views. */

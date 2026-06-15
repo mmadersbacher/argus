@@ -602,7 +602,7 @@ fn monitoring(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argus_core::{Cvss, Epss};
+    use argus_core::{Confidence, Cvss, Epss};
 
     fn at(days_ago: i64) -> OffsetDateTime {
         OffsetDateTime::UNIX_EPOCH + Duration::days(1000 - days_ago)
@@ -627,10 +627,11 @@ mod tests {
             }),
             epss: epss.map(|score| Epss {
                 score,
-                percentile: score,
+                percentile: Some(score),
             }),
             kev,
             severity,
+            match_confidence: Confidence::High,
         }
     }
 
@@ -644,6 +645,7 @@ mod tests {
             risk: RiskScore {
                 value: risk,
                 band: RiskBand::from_value(risk),
+                confidence: Confidence::High,
             },
             vulns,
             first_seen: at(40),

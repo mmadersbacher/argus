@@ -210,8 +210,8 @@ mod tests {
 
     use argus_core::tenant::Role;
     use argus_core::{
-        Asset, AssetType, Criticality, Cvss, Epss, Exposure, Fingerprint, Interface, RiskScore,
-        Vulnerability,
+        Asset, AssetType, Confidence, Criticality, Cvss, Epss, Exposure, Fingerprint, Interface,
+        RiskScore, Vulnerability,
     };
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -236,10 +236,11 @@ mod tests {
             }),
             epss: epss.map(|score| Epss {
                 score,
-                percentile: score,
+                percentile: Some(score),
             }),
             kev,
             severity,
+            match_confidence: Confidence::High,
         }
     }
 
@@ -265,6 +266,7 @@ mod tests {
             risk: RiskScore {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
+                confidence: Confidence::High,
             },
             overrides: crate::seed::AssetOverrides::default(),
         }
@@ -526,6 +528,7 @@ mod tests {
             keys: AuthKeys::from_secret(b"test-secret"),
             limiter: Arc::new(LoginLimiter::default()),
             signup_enabled: false,
+            scan_allow_private: true,
             ingest_locks: IngestLocks::default(),
             intel: argus_vuln::intel::IntelCache::new(None),
         };

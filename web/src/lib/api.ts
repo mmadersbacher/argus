@@ -15,10 +15,14 @@ export type AssetType =
   | "unknown";
 export type Criticality = "low" | "medium" | "high" | "critical";
 export type Exposure = "internal" | "internet_facing" | "unknown";
+/** Match / observation confidence, ordered low < medium < high < confirmed. */
+export type Confidence = "low" | "medium" | "high" | "confirmed";
 
 export interface RiskScore {
   value: number;
   band: RiskBand;
+  /** Confidence of the highest-CVSS vulnerability driving the score. */
+  confidence: Confidence;
 }
 
 export interface Fingerprint {
@@ -51,7 +55,7 @@ export interface Cvss {
 
 export interface Epss {
   score: number;
-  percentile: number;
+  percentile: number | null;
 }
 
 export interface Vulnerability {
@@ -60,6 +64,8 @@ export interface Vulnerability {
   epss: Epss | null;
   kev: boolean;
   severity: Severity;
+  /** How reliably this CVE was matched (CPE+version vs. version-blind). */
+  match_confidence: Confidence;
 }
 
 /** Analyst-set business context; overrides win over discovery and survive

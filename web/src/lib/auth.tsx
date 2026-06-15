@@ -76,6 +76,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     clearSession();
+    // Hard-navigate so no protected view lingers on a stale render. The
+    // AppShell guard effect would also catch this, but logout must not depend
+    // on it firing.
+    if (typeof window !== "undefined") window.location.href = "/login";
   }, []);
 
   const value = useMemo(

@@ -243,7 +243,9 @@ pub async fn set_monitor(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     auth.require(Role::Analyst)?;
     let target = req.target.trim();
-    argus_discovery::expand(target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let ips =
+        argus_discovery::expand(target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    crate::reject_private_targets(&ips, state.scan_allow_private)?;
     if !(1..=1440).contains(&req.interval_minutes) {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -305,8 +307,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     use argus_core::{
-        Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, Protocol,
-        RiskBand, RiskScore, Service, Severity, Vulnerability,
+        Asset, AssetId, AssetType, Confidence, Criticality, Exposure, Fingerprint, Interface,
+        Protocol, RiskBand, RiskScore, Service, Severity, Vulnerability,
     };
 
     use super::*;
@@ -357,11 +359,13 @@ mod tests {
                     epss: None,
                     kev,
                     severity: Severity::High,
+                    match_confidence: Confidence::High,
                 })
                 .collect(),
             risk: RiskScore {
                 value: risk_value,
                 band: RiskBand::from_value(risk_value),
+                confidence: Confidence::High,
             },
             overrides: crate::seed::AssetOverrides::default(),
         }

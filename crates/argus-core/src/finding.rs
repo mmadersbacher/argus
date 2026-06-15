@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::ids::{AssetId, FindingId};
-use crate::vuln::Severity;
+use crate::vuln::{Confidence, Severity};
 
 /// Where a finding originated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,20 +18,6 @@ pub enum FindingSource {
     Integration,
     /// Entered manually by an analyst.
     Manual,
-}
-
-/// Confidence level of a finding. Ordered `Low < Medium < High < Confirmed`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Confidence {
-    /// Weak signal.
-    Low,
-    /// Moderate signal.
-    Medium,
-    /// Strong signal.
-    High,
-    /// Verified / confirmed.
-    Confirmed,
 }
 
 /// A single observation about an asset (open service, weakness, policy gap, ...).
