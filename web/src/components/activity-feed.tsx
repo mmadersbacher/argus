@@ -116,7 +116,7 @@ export function ActivityFeed({ className }: { className?: string }) {
           hint="Changes show up here after the next scan or monitor run."
         />
       ) : (
-        <ul className="divide-y divide-line">
+        <ul aria-live="polite" className="divide-y divide-line">
           {events.map((e) => {
             const badge = kindBadge(e);
             return (
