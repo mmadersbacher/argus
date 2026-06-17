@@ -1,0 +1,69 @@
+# FF1 ground-truth set — correlation precision.  Columns: product,cve_id,applies
+#
+# Each CVE appears twice: one product string at a version it REALLY applies to
+# (applies=true) and one at a version it does NOT (applies=false, i.e. fixed or
+# out of the affected range). "applies" is the NVD / vendor-advisory truth —
+# version constraints were looked up per CVE (see nvd_constraint sources below).
+# The harness feeds `product` to argus_vuln::correlate_product and checks whether
+# `cve_id` is reported and at what match_confidence, then scores TP/FP per
+# confidence tier. This isolates one question: does the confidence label predict
+# whether a hit is real?
+#
+# Affected versions are chosen safely INSIDE the affected range (not on a
+# boundary) so the measurement is about confidence-vs-precision, not about
+# version-string edge cases.
+#
+# Two tiers exist in the catalog:
+#   - version-checked entries (Range/Exact/AtMost/LessThan) -> match_confidence High
+#   - protocol/version-blind entries (VersionRange::Any)     -> match_confidence Low
+# A version-blind entry reports the CVE regardless of version, so its "patched"
+# row is a false positive BY CONSTRUCTION — which is exactly why it carries Low
+# confidence. Honest exception: MySQL's catalog range (5.1.0..=5.6.5) spans
+# multiple branches with different per-branch fixes, so a patched 5.5.24 still
+# falls in range and is reported at HIGH confidence — a genuine High-confidence
+# false positive from a too-coarse range, kept here deliberately.
+#
+# Run against your own set: cargo run -p argus-eval -- ff1 <file.csv>
+product,cve_id,applies
+# --- version-checked entries (expected High when reported) ---
+OpenSSH 9.6p1,CVE-2024-6387,true
+OpenSSH 9.8p1,CVE-2024-6387,false
+OpenSSH 7.6,CVE-2018-15473,true
+OpenSSH 7.8,CVE-2018-15473,false
+OpenSSL 1.0.1f,CVE-2014-0160,true
+OpenSSL 1.0.1g,CVE-2014-0160,false
+Apache httpd 2.4.49,CVE-2021-41773,true
+Apache httpd 2.4.51,CVE-2021-41773,false
+nginx 1.4.0,CVE-2013-2028,true
+nginx 1.4.1,CVE-2013-2028,false
+Exim 4.91,CVE-2019-10149,true
+Exim 4.92,CVE-2019-10149,false
+Tomcat 9.0.30,CVE-2020-1938,true
+Tomcat 9.0.31,CVE-2020-1938,false
+Jenkins 2.441,CVE-2024-23897,true
+Jenkins 2.442,CVE-2024-23897,false
+xz 5.6.1,CVE-2024-3094,true
+xz 5.6.2,CVE-2024-3094,false
+MySQL 5.5.23,CVE-2012-2122,true
+MySQL 5.5.24,CVE-2012-2122,false
+# --- version-blind (Any) entries (expected Low when reported) ---
+Log4j 2.14.1,CVE-2021-44228,true
+Log4j 2.15.0,CVE-2021-44228,false
+Spring 5.3.17,CVE-2022-22965,true
+Spring 5.3.18,CVE-2022-22965,false
+Struts 2.5.10,CVE-2017-5638,true
+Struts 2.5.10.1,CVE-2017-5638,false
+ActiveMQ 5.18.2,CVE-2023-46604,true
+ActiveMQ 5.18.3,CVE-2023-46604,false
+WebLogic 10.3.6.0,CVE-2019-2725,true
+WebLogic 12.2.1.3,CVE-2019-2725,false
+Citrix 13.0.91.13,CVE-2023-4966,true
+Citrix 13.0.92.19,CVE-2023-4966,false
+FortiOS 7.0.6,CVE-2022-40684,true
+FortiOS 7.0.7,CVE-2022-40684,false
+Confluence 7.13.6,CVE-2022-26134,true
+Confluence 7.13.7,CVE-2022-26134,false
+vCenter 7.0.0,CVE-2021-21972,true
+vCenter 7.0.1,CVE-2021-21972,false
+GitLab 13.10.2,CVE-2021-22205,true
+GitLab 13.10.3,CVE-2021-22205,false
