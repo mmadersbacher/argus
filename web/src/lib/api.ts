@@ -372,6 +372,37 @@ export async function fetchVulns(): Promise<VulnRow[]> {
   return fetchJSON<VulnRow[]>("/api/vulns");
 }
 
+// ---- topology graph --------------------------------------------------------
+
+export type GraphNodeKind = "asset" | "subnet";
+
+export interface GraphNode {
+  id: string;
+  kind: GraphNodeKind;
+  label: string;
+  /** Subnet group key ("a.b.c.0/24" or "unzoned"). */
+  group: string;
+  asset_type?: AssetType;
+  risk?: number;
+  band?: RiskBand;
+  exposure?: Exposure;
+  /** Asset count (subnet hubs only). */
+  count?: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** Asset topology graph: nodes are assets plus a hub per /24 subnet. */
+export const fetchGraph = () => fetchJSON<GraphData>("/api/graph");
+
 /** Set or clear ("open") the triage status of one finding. Requires analyst
  *  or higher; returns the new state, or null when back to open. */
 export const setFinding = (

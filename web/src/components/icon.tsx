@@ -19,7 +19,8 @@ export type IconName =
   | "x"
   | "external"
   | "file"
-  | "logout";
+  | "logout"
+  | "graph";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = {
@@ -174,6 +175,15 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
           <path d="M10 4.5H6A1.5 1.5 0 0 0 4.5 6v12A1.5 1.5 0 0 0 6 19.5h4" />
           <path d="m15.5 8 4 4-4 4" />
           <path d="M19.5 12H9.5" />
+        </svg>
+      );
+    case "graph":
+      return (
+        <svg {...common}>
+          <circle cx="6" cy="6.5" r="2.3" />
+          <circle cx="18" cy="9" r="2.3" />
+          <circle cx="9.5" cy="18" r="2.3" />
+          <path d="M8 7.3 15.8 8.5M7.2 8.4 8.6 15.8M11.4 16.8 16.3 10.7" />
         </svg>
       );
     default:

@@ -28,6 +28,7 @@ mod account;
 mod auth;
 mod db;
 mod findings;
+mod graph;
 mod monitor;
 mod policy;
 mod report;
@@ -246,6 +247,7 @@ fn router(state: AppState) -> Router {
         .route("/api/assets/{id}", get(get_asset).patch(update_asset))
         .route("/api/summary", get(summary))
         .route("/api/vulns", get(vulns::list_vulns))
+        .route("/api/graph", get(graph::get_graph))
         .route("/api/findings", post(findings::set_finding))
         .route("/api/findings/bulk", post(findings::set_findings_bulk))
         .route("/api/report", get(report::get_report))

@@ -28,6 +28,7 @@ const sections: NavSection[] = [
       { label: "Overview", href: "/", icon: "grid" },
       { label: "Assets", href: "/assets", icon: "server" },
       { label: "Network", href: "/network", icon: "network" },
+      { label: "Graph", href: "/graph", icon: "graph" },
     ],
   },
   {
