@@ -1,15 +1,13 @@
-//! OUI → vendor lookup, loaded from nmap's `nmap-mac-prefixes` database.
+//! OUI → vendor lookup. Uses a bundled IEEE OUI snapshot (current, always
+//! present, no external dependency); set `ARGUS_OUI_DB` to point at a newer file.
 
 use std::collections::HashMap;
 
 use argus_core::MacAddr;
 
-const CANDIDATE_PATHS: &[&str] = &[
-    "/usr/share/nmap/nmap-mac-prefixes",
-    "/usr/local/share/nmap/nmap-mac-prefixes",
-    "C:\\Program Files (x86)\\Nmap\\nmap-mac-prefixes",
-    "C:\\Program Files\\Nmap\\nmap-mac-prefixes",
-];
+/// Bundled IEEE MA-L assignments in `nmap-mac-prefixes` format (`AABBCC Vendor`).
+/// Regenerate from <https://standards-oui.ieee.org/oui/oui.csv> (MA-L rows only).
+const BUNDLED: &str = include_str!("../data/oui-prefixes.txt");
 
 /// An OUI (24-bit MAC prefix) → vendor lookup table.
 pub struct OuiDb {
@@ -17,18 +15,20 @@ pub struct OuiDb {
 }
 
 impl OuiDb {
-    /// Load from the first available `nmap-mac-prefixes` file. Empty if none found.
+    /// Load the OUI table: an `ARGUS_OUI_DB` file if set and non-empty, else the
+    /// bundled IEEE snapshot (so vendor lookup always works, with or without nmap).
     #[must_use]
     pub fn load() -> Self {
-        for path in CANDIDATE_PATHS {
-            if let Ok(contents) = std::fs::read_to_string(path) {
-                return Self {
-                    map: parse(&contents),
-                };
+        if let Ok(path) = std::env::var("ARGUS_OUI_DB") {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                let map = parse(&contents);
+                if !map.is_empty() {
+                    return Self { map };
+                }
             }
         }
         Self {
-            map: HashMap::new(),
+            map: parse(BUNDLED),
         }
     }
 
@@ -100,5 +100,19 @@ AABBCC Acme Corp
             Some("Thomas-Conrad")
         );
         assert_eq!(db.vendor(MacAddr([0xFF, 0xFF, 0xFF, 0, 0, 0])), None);
+    }
+
+    #[test]
+    fn bundled_db_loads_and_resolves_modern_ouis() {
+        let db = OuiDb::load();
+        assert!(
+            db.len() > 30_000,
+            "bundled IEEE db should hold tens of thousands of prefixes, got {}",
+            db.len()
+        );
+        // 1C:AF:4A (Samsung) was absent from the 2019 nmap db; the IEEE snapshot has it.
+        assert!(db
+            .vendor(MacAddr([0x1C, 0xAF, 0x4A, 0, 0, 0]))
+            .is_some_and(|v| v.contains("Samsung")));
     }
 }
