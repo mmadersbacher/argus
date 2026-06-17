@@ -86,6 +86,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argus-eval"
+version = "0.1.0"
+dependencies = [
+ "argus-core",
+ "argus-vuln",
+]
+
+[[package]]
 name = "argus-intel"
 version = "0.1.0"
 dependencies = [

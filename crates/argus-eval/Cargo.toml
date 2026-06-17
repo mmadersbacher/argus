@@ -1,0 +1,16 @@
+[package]
+name = "argus-eval"
+description = "Argus research-evaluation harness: measures prioritisation quality (FF2) and, later, correlation precision (FF1) against a ground-truth dataset."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-core = { path = "../argus-core" }
+argus-vuln = { path = "../argus-vuln" }
