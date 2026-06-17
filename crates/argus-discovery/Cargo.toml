@@ -19,3 +19,6 @@ roxmltree = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+argus-intel = { path = "../argus-intel" }
