@@ -1,8 +1,28 @@
 # Argus Roadmap
 
-**North star:** a *deployable, multi-tenant SaaS* exposure-management platform.
-Every goal below is judged against "can a hosted operator run this safely for
-real tenants?" — not demo polish. Checkboxes are the live task list.
+## Vision (vollendeter Endzustand)
+
+Eine Open-Source-CAASM-/Exposure-Management-Plattform, die jedes Gerät in einem
+Netz **kontinuierlich entdeckt** (aktiv OT-sicher + passiv + Connectors),
+**identifiziert** (heuristisch, später trainiertes Modell auf offenen
+Fingerprint-Daten), seine Schwachstellen **konfidenzbewusst korreliert**
+(NVD/KEV/EPSS) und **kontextbewusst priorisiert**, und **kontinuierlich
+überwacht** (Re-Scan, Change-Detection, advisory Policy, Reports) — betreibbar
+als sicheres Multi-Tenant-SaaS oder self-hosted, mit einem **Agent/Relay-Modell**
+statt zentralem Scannen. Architektonisch an Armis/runZero orientiert, aber
+vollständig auf offenen Daten — ehrlich über die eine nicht-replizierbare Grenze
+(Cross-Customer-Intelligence; siehe Spec §2/§9).
+
+**North star (operativ):** *deployable, multi-tenant SaaS* — jedes Ziel unten
+misst sich an „kann ein Betreiber das sicher für echte Mandanten betreiben?",
+nicht an Demo-Politur. Checkboxes sind die Live-Task-Liste.
+
+> **Wichtig — Produkt-Vision ≠ Diplomarbeits-Scope.** Die Arbeit liefert den
+> **P1-Spine** (Discovery → Korrelation → Priorisierung → Konsole) + die
+> SaaS-Foundation + die **Evaluation zweier Forschungsfragen** (konfidenzbasierte
+> CVE-Korrelation; kontextbewusste Priorisierung). Passive Sensing, trainiertes
+> ML, Connectors, Agent/Relay und Billing sind **Produkt-Ausblick**, kein
+> Liefergegenstand der Arbeit.
 
 ## Status (2026-06-15)
 

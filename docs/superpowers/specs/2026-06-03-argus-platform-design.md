@@ -62,7 +62,7 @@ Lab-Captures, **(c)** **[geplant]** per-Deployment-Verhaltens-Baselines
 | 100+ Integrationen | Daten aus Firewalls/EDR/Cloud/CMDB ziehen | `argus-connectors` (Cloud/AD/NetBox/EDR) |
 | Aktive Erkennung (ergänzend) | Hosts/Ports/Services scannen | `argus-discovery` (nmap/masscan/arp-scan/naabu) |
 | Ingestion & Normalization | Rohdaten vereinheitlichen | `argus-ingest` |
-| Unified Asset Inventory | 1 Record je realem Gerät (Dedup) | `argus-core` (Asset-Graph + Dedup-Engine) |
+| Unified Asset Inventory | 1 Record je realem Gerät (Dedup) | `argus-core` (Asset-Record-Modell + Dedup; ein Graph-View ist **[geplant]**) |
 | **Asset Intelligence Engine** | Geräte klassifizieren/baselinen | `argus-intel` (Open-Fingerprint-DBs + heuristischer Klassifikator; ML **[geplant]**) |
 | Vulnerability-Korrelation | CVE ↔ Asset matchen | `argus-vuln` (NVD/KEV/EPSS CPE-Match + nuclei/OpenVAS) |
 | Risk Engine | Risiko-Score je Asset & Org | `argus-core` (`risk.rs`), orchestriert von `argus-api`/`argus-vuln` |
@@ -88,7 +88,7 @@ argus/
    ├─ argus-sensor         # passives Sensing (pcap/Zeek/p0f)            [P2]
    ├─ argus-behavior       # Anomalie-Baselines                         [P2]
    ├─ argus-connectors     # externe Integrationen (Cloud/AD/NetBox)    [P2]
-   └─ argus-ingest         # Normalisierungs-Pipeline                   [P2]
+   └─ argus-ingest         # Normalisierungs-Pipeline (Logik derzeit in argus-api) [P2]
    # Risk-Scoring liegt in argus-core; kein eigenes argus-risk-Crate.
 ```
 
@@ -143,7 +143,8 @@ Konventionen wie SecurityToolKMU: `unsafe_code = "forbid"`, clippy pedantic+nurs
 
 ## 8. Multi-Tenancy & SaaS
 
-Tenant-Isolation via `tenant_id` + Postgres Row-Level-Security. RBAC pro Tenant.
+Tenant-Isolation via `tenant_id` (app-seitig, jede Query gescoped). RBAC pro Tenant.
+**[geplant]:** zusätzlich Postgres Row-Level-Security.
 API-Keys je Org. Billing-ready Struktur (Plan/Quota-Felder) — Billing selbst erst P3+.
 
 ## 9. Non-Goals (explizit, damit kein Scope-Selbstbetrug entsteht)
@@ -156,6 +157,14 @@ API-Keys je Org. Billing-ready Struktur (Plan/Quota-Felder) — Billing selbst e
   mit Armis-Architektur und Enterprise-Optik.
 
 ## 10. Bau-Reihenfolge (Vollausbau, phasiert)
+
+> **[Stand 2026-06] Reale Reihenfolge weicht ab:** P0 → P1 → **P3-SaaS vorgezogen**
+> (Auth, Multi-Tenant, RBAC, Console v2, Policy, Report, IR **und Continuous
+> Monitoring** — in der Spec eigentlich P2) → **P2-Intelligence zurückgestellt**.
+> Die Phasen-Nummern sind die ursprüngliche Gliederung, nicht die Ist-Reihenfolge.
+> Reale Namen: Risk-Scoring in `argus-core` (kein `argus-risk`), Konsole unter
+> `web/` (kein `argus-web`-Crate), kein force-directed Asset-Graph (SVG/Grid).
+> Aktueller Stand: [`ROADMAP.md`](../../../ROADMAP.md).
 
 - **P0 — Foundations:** Repo, Workspace, CI, `argus-core`-Modell, Postgres-Schema,
   Auth/Tenant-Grundgerüst, leeres `argus-api` + `argus-web`-Shell.
