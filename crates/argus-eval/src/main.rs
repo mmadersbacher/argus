@@ -3,92 +3,121 @@
 //! Research question FF2: does the context-aware composite score (CVSS + EPSS +
 //! KEV + exposure + criticality) prioritise vulnerabilities better than a raw
 //! CVSS sort? Ground truth is the CISA KEV catalog ("really exploited" → should
-//! rank high). The harness ranks the dataset both ways and reports KEV recall@N
-//! and the mean rank of KEV CVEs under each ranking.
+//! rank high). The harness ranks a dataset both ways and reports KEV recall@N,
+//! the mean rank of KEV CVEs, and which exploited CVEs CVSS-only under-ranks —
+//! including the NVD-gap case (a KEV CVE with no CVSS at all).
 //!
-//! Dataset caveat (be honest in the thesis): the bundled offline catalog (~37
-//! curated CVEs) is KEV-heavy and CVSS-high-heavy, and every entry carries a
-//! CVSS — so it understates the effect and cannot show the "missing-CVSS / NVD
-//! gap" case at all. The *measurement logic* here is the reusable artefact:
-//! swap [`dataset`] for a live/official EPSS+KEV set and the metrics still hold.
+//! Dataset: a small curated CSV is embedded as the default; pass a path to run
+//! against a real one — `cargo run -p argus-eval -- <file.csv>` with columns
+//! `cve_id,cvss,epss,kev` (empty cvss = NVD has not scored it). The measurement
+//! logic is dataset-agnostic; for a headline result feed the full FIRST.org
+//! EPSS set joined with CISA KEV and NVD CVSS.
 
 #![allow(clippy::cast_precision_loss)]
 
-use argus_core::{Confidence, Criticality, Cvss, Epss, Exposure, RiskScore, Vulnerability};
-use argus_vuln::{catalog, risk_inputs};
+use argus_core::{
+    Confidence, Criticality, Cvss, Epss, Exposure, RiskScore, Severity, Vulnerability,
+};
+use argus_vuln::risk_inputs;
 
-/// One scored vulnerability: its CVSS, KEV ground-truth flag, and the Argus
-/// composite score computed for a single-vuln, maximally-exposed asset (so the
-/// exposure/criticality factors are 1.0 and only the CVE-intrinsic blend of
-/// CVSS, EPSS and the KEV likelihood-floor drives the score).
+/// Default dataset embedded in the crate (see `data/ff2-sample.csv`).
+const SAMPLE: &str = include_str!("../data/ff2-sample.csv");
+
+/// One scored vulnerability. `cvss` is `None` when NVD has not scored the CVE.
 struct Finding {
-    id: &'static str,
-    cvss: f32,
+    id: String,
+    cvss: Option<f32>,
     kev: bool,
     composite: f32,
 }
 
-/// Build the evaluation dataset from the offline catalog.
-fn dataset() -> Vec<Finding> {
-    catalog::CATALOG
-        .iter()
-        .map(|rec| {
-            let vuln = Vulnerability {
-                cve_id: rec.cve_id.to_owned(),
-                cvss: Some(Cvss {
-                    base_score: rec.cvss,
-                    vector: None,
-                }),
-                epss: Some(Epss {
-                    score: rec.epss,
-                    percentile: None,
-                }),
-                kev: rec.kev,
-                severity: rec.severity,
-                match_confidence: Confidence::High,
-            };
-            let inputs = risk_inputs(&[vuln], Exposure::InternetFacing, Criticality::Critical);
-            Finding {
-                id: rec.cve_id,
-                cvss: rec.cvss,
-                kev: rec.kev,
-                composite: RiskScore::compute(&inputs).value,
+/// Composite score for a single CVE on a maximally-exposed, critical asset
+/// (so the exposure/criticality factors are 1.0 and only CVSS + EPSS + the KEV
+/// likelihood-floor drive it). A missing CVSS contributes zero severity but the
+/// EPSS and KEV signals still score it — unlike a CVSS sort, which cannot.
+fn composite_score(cvss: Option<f32>, epss: f32, kev: bool) -> f32 {
+    let vuln = Vulnerability {
+        cve_id: String::new(),
+        cvss: cvss.map(|base_score| Cvss {
+            base_score,
+            vector: None,
+        }),
+        epss: Some(Epss {
+            score: epss,
+            percentile: None,
+        }),
+        kev,
+        severity: cvss.map_or(Severity::None, Severity::from_cvss),
+        match_confidence: Confidence::High,
+    };
+    let inputs = risk_inputs(&[vuln], Exposure::InternetFacing, Criticality::Critical);
+    RiskScore::compute(&inputs).value
+}
+
+/// Parse a `cve_id,cvss,epss,kev` CSV. Blank lines, `#` comments and a `cve_id`
+/// header row are skipped; an empty cvss cell yields `None`.
+fn parse_dataset(csv: &str) -> Vec<Finding> {
+    csv.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|line| {
+            let mut col = line.split(',');
+            let id = col.next()?.trim();
+            if id.is_empty() || id.eq_ignore_ascii_case("cve_id") {
+                return None;
             }
+            let cvss_cell = col.next()?.trim();
+            let cvss = if cvss_cell.is_empty() {
+                None
+            } else {
+                cvss_cell.parse::<f32>().ok()
+            };
+            let epss = col.next()?.trim().parse::<f32>().ok()?;
+            let kev = matches!(col.next()?.trim(), "true" | "1" | "yes");
+            Some(Finding {
+                composite: composite_score(cvss, epss, kev),
+                id: id.to_owned(),
+                cvss,
+                kev,
+            })
         })
         .collect()
 }
 
-/// Indices of `findings` ordered by descending CVSS.
-fn rank_by_cvss(findings: &[Finding]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..findings.len()).collect();
-    idx.sort_by(|&a, &b| findings[b].cvss.total_cmp(&findings[a].cvss));
+/// Indices ordered by descending CVSS; CVEs with no CVSS sort to the very end.
+fn rank_by_cvss(f: &[Finding]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..f.len()).collect();
+    idx.sort_by(|&a, &b| {
+        let ka = f[a].cvss.unwrap_or(f32::NEG_INFINITY);
+        let kb = f[b].cvss.unwrap_or(f32::NEG_INFINITY);
+        kb.total_cmp(&ka)
+    });
     idx
 }
 
-/// Indices of `findings` ordered by descending composite score.
-fn rank_by_composite(findings: &[Finding]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..findings.len()).collect();
-    idx.sort_by(|&a, &b| findings[b].composite.total_cmp(&findings[a].composite));
+/// Indices ordered by descending composite score.
+fn rank_by_composite(f: &[Finding]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..f.len()).collect();
+    idx.sort_by(|&a, &b| f[b].composite.total_cmp(&f[a].composite));
     idx
 }
 
-/// Fraction of KEV findings that land in the top-`n` of `ranking`
-/// (`n` = number of KEV findings). 1.0 means every KEV CVE is on top.
-fn kev_recall(findings: &[Finding], ranking: &[usize], n: usize) -> f64 {
-    let kev_total = findings.iter().filter(|f| f.kev).count();
-    if kev_total == 0 {
+/// Fraction of KEV findings in the top-`n` of `ranking` (1.0 = all on top).
+fn kev_recall(f: &[Finding], ranking: &[usize], n: usize) -> f64 {
+    let total = f.iter().filter(|x| x.kev).count();
+    if total == 0 {
         return 0.0;
     }
-    let hits = ranking.iter().take(n).filter(|&&i| findings[i].kev).count();
-    hits as f64 / kev_total as f64
+    let hits = ranking.iter().take(n).filter(|&&i| f[i].kev).count();
+    hits as f64 / total as f64
 }
 
 /// Mean 1-indexed rank of the KEV findings (lower = prioritised higher).
-fn mean_kev_rank(findings: &[Finding], ranking: &[usize]) -> f64 {
+fn mean_kev_rank(f: &[Finding], ranking: &[usize]) -> f64 {
     let ranks: Vec<usize> = ranking
         .iter()
         .enumerate()
-        .filter(|&(_, &i)| findings[i].kev)
+        .filter(|&(_, &i)| f[i].kev)
         .map(|(pos, _)| pos + 1)
         .collect();
     if ranks.is_empty() {
@@ -98,109 +127,112 @@ fn mean_kev_rank(findings: &[Finding], ranking: &[usize]) -> f64 {
 }
 
 /// 1-indexed position of `id` in `ranking`, or 0 if absent.
-fn position(findings: &[Finding], ranking: &[usize], id: &str) -> usize {
+fn position(f: &[Finding], ranking: &[usize], id: &str) -> usize {
     ranking
         .iter()
-        .position(|&i| findings[i].id == id)
+        .position(|&i| f[i].id == id)
         .map_or(0, |p| p + 1)
 }
 
 fn main() {
-    let findings = dataset();
+    let dataset = std::env::args().nth(1).map_or_else(
+        || SAMPLE.to_owned(),
+        |path| {
+            std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                eprintln!("cannot read {path}: {e}");
+                std::process::exit(1);
+            })
+        },
+    );
+    let findings = parse_dataset(&dataset);
+    if findings.is_empty() {
+        eprintln!("no findings parsed from the dataset");
+        std::process::exit(1);
+    }
+
     let total = findings.len();
     let kev_n = findings.iter().filter(|f| f.kev).count();
-
+    let no_cvss = findings.iter().filter(|f| f.cvss.is_none()).count();
     let by_cvss = rank_by_cvss(&findings);
     let by_comp = rank_by_composite(&findings);
 
     println!("FF2 — prioritisation: composite vs CVSS-only (ground truth: CISA KEV)");
-    println!(
-        "dataset: {total} CVEs, {kev_n} KEV  [offline catalog — KEV-heavy, see source note]\n"
-    );
+    println!("dataset: {total} CVEs, {kev_n} KEV, {no_cvss} without CVSS (NVD gap)\n");
 
-    println!("{:<20} {:>11} {:>11}", "metric", "CVSS-only", "composite");
+    println!("{:<18} {:>11} {:>11}", "metric", "CVSS-only", "composite");
     println!(
-        "{:<20} {:>11.2} {:>11.2}",
+        "{:<18} {:>11.2} {:>11.2}",
         "KEV recall@N",
         kev_recall(&findings, &by_cvss, kev_n),
         kev_recall(&findings, &by_comp, kev_n),
     );
     println!(
-        "{:<20} {:>11.2} {:>11.2}  (lower is better)",
+        "{:<18} {:>11.2} {:>11.2}  (lower=better)",
         "mean KEV rank",
         mean_kev_rank(&findings, &by_cvss),
         mean_kev_rank(&findings, &by_comp),
     );
 
-    println!("\nlow-CVSS (<7.0) but KEV-listed CVEs — rank under each:");
-    let mut any = false;
+    // The FF2 effect: exploited (KEV) CVEs that a CVSS sort mis-ranks — low-CVSS
+    // ones, and worst, the NVD-gap CVEs with no CVSS (sorted to the bottom).
+    println!("\nexploited (KEV) CVEs that CVSS-only under-ranks:");
+    let mut shown = false;
     for f in &findings {
-        if f.kev && f.cvss < 7.0 {
-            any = true;
+        if f.kev && f.cvss.is_none_or(|c| c < 7.0) {
+            shown = true;
+            let cvss = f
+                .cvss
+                .map_or_else(|| "none".to_owned(), |c| format!("{c:.1}"));
             println!(
-                "  {:<18} cvss {:>4}  cvss-rank {:>3}  composite-rank {:>3}",
+                "  {:<16} cvss {:>4}  cvss-rank {:>3}  composite-rank {:>3}",
                 f.id,
-                f.cvss,
-                position(&findings, &by_cvss, f.id),
-                position(&findings, &by_comp, f.id),
+                cvss,
+                position(&findings, &by_cvss, &f.id),
+                position(&findings, &by_comp, &f.id),
             );
         }
     }
-    if !any {
+    if !shown {
         println!("  (none in this dataset)");
     }
 
-    println!("\nNote: every catalog CVE carries a CVSS, so the missing-CVSS NVD-gap effect");
-    println!("is not measurable here — that needs a live/official dataset. The metrics");
-    println!("above are dataset-agnostic: replace dataset() and re-run.");
+    println!("\nRun against your own data: `cargo run -p argus-eval -- <file.csv>`");
+    println!("(cve_id,cvss,epss,kev; empty cvss = NVD gap).");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fixture() -> Vec<Finding> {
-        vec![
-            Finding {
-                id: "high-not-kev",
-                cvss: 9.8,
-                kev: false,
-                composite: 70.0,
-            },
-            Finding {
-                id: "low-but-kev",
-                cvss: 5.0,
-                kev: true,
-                composite: 90.0,
-            },
-            Finding {
-                id: "mid-kev",
-                cvss: 7.5,
-                kev: true,
-                composite: 95.0,
-            },
-        ]
+    #[test]
+    fn parses_csv_skipping_comments_header_and_empty_cvss() {
+        let csv = "# note\ncve_id,cvss,epss,kev\nCVE-1,9.8,0.9,true\nCVE-2,,0.8,true\nCVE-3,4.0,0.01,false\n";
+        let f = parse_dataset(csv);
+        assert_eq!(f.len(), 3);
+        assert_eq!(f[1].cvss, None);
+        assert!(f[0].kev);
+        assert!(!f[2].kev);
     }
 
     #[test]
-    fn composite_ranks_low_cvss_kev_above_high_cvss_non_kev() {
-        let f = fixture();
-        let by_cvss = rank_by_cvss(&f);
-        let by_comp = rank_by_composite(&f);
-        // CVSS-only buries the exploited low-CVSS CVE at the bottom...
-        assert_eq!(position(&f, &by_cvss, "low-but-kev"), 3);
-        // ...the composite (KEV floor) lifts it to the top.
-        assert_eq!(position(&f, &by_comp, "low-but-kev"), 2);
-        // KEV recall@2 is perfect for the composite, partial for CVSS-only.
-        assert!((kev_recall(&f, &by_comp, 2) - 1.0).abs() < f64::EPSILON);
-        assert!(kev_recall(&f, &by_cvss, 2) < 1.0);
+    fn cvss_sort_buries_a_no_cvss_kev_cve_that_composite_lifts() {
+        // KEV CVE with no CVSS but high EPSS: CVSS-only sorts it last; the
+        // composite (KEV floor + EPSS) ranks it above the low-risk noise.
+        let f =
+            parse_dataset("CVE-hi,9.8,0.02,false\nCVE-gap,,0.9,true\nCVE-noise,3.0,0.01,false\n");
+        assert_eq!(position(&f, &rank_by_cvss(&f), "CVE-gap"), 3);
+        assert!(position(&f, &rank_by_composite(&f), "CVE-gap") < 3);
     }
 
     #[test]
-    fn mean_kev_rank_is_lower_for_composite() {
-        let f = fixture();
-        let cvss_rank = mean_kev_rank(&f, &rank_by_cvss(&f));
-        let comp_rank = mean_kev_rank(&f, &rank_by_composite(&f));
-        assert!(comp_rank < cvss_rank);
+    fn composite_prioritises_kev_at_least_as_well_on_the_sample() {
+        let f = parse_dataset(SAMPLE);
+        assert!(!f.is_empty());
+        let cvss = mean_kev_rank(&f, &rank_by_cvss(&f));
+        let comp = mean_kev_rank(&f, &rank_by_composite(&f));
+        assert!(
+            comp < cvss,
+            "composite should rank KEV CVEs higher: {comp} vs {cvss}"
+        );
     }
 }

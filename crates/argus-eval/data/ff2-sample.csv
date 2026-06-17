@@ -1,0 +1,27 @@
+# FF2 sample dataset — curated.  Columns: cve_id,cvss,epss,kev
+#
+# CVSS (v3 base score) and KEV status are FACTUAL. An EMPTY cvss column means
+# NVD has not scored the CVE (the "NVD gap" case — increasingly common since
+# 2024). EPSS is an APPROXIMATE 2025 snapshot (it drifts daily). Rows prefixed
+# SYNTH have no real CVE id; they exist only to exercise edge cases (low-risk
+# noise, and exploited CVEs that lack a CVSS).
+#
+# This is a demonstration set. For a headline result, replace it with the full
+# FIRST.org EPSS CSV joined with CISA KEV and NVD CVSS, via:
+#   cargo run -p argus-eval -- <your-dataset.csv>
+cve_id,cvss,epss,kev
+CVE-2021-44228,10.0,0.945,true
+CVE-2017-0144,8.1,0.949,true
+CVE-2019-0708,9.8,0.946,true
+CVE-2020-1472,10.0,0.943,true
+CVE-2018-13379,9.8,0.967,true
+CVE-2023-34362,9.8,0.940,true
+CVE-2023-4966,9.4,0.941,true
+CVE-2014-0160,7.5,0.945,true
+CVE-2022-30190,7.8,0.948,true
+CVE-2023-38545,9.8,0.041,false
+CVE-2024-3094,10.0,0.016,false
+SYNTH-NOISE-1,4.3,0.004,false
+SYNTH-NOISE-2,5.3,0.006,false
+SYNTH-NVDGAP-1,,0.870,true
+SYNTH-NVDGAP-2,,0.560,true
