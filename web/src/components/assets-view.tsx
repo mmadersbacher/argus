@@ -173,6 +173,13 @@ export function AssetsView() {
   };
 
   const onImport = async (file: File) => {
+    const MAX_IMPORT_BYTES = 20 * 1024 * 1024; // 20 MB — guard against reading a huge file into memory
+    if (file.size > MAX_IMPORT_BYTES) {
+      setScanNote(
+        `file too large (${(file.size / 1_048_576).toFixed(1)} MB; max 20 MB)`,
+      );
+      return;
+    }
     setScanning(true);
     setScanNote(null);
     try {
