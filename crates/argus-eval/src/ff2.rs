@@ -12,6 +12,14 @@
 //! `cve_id,cvss,epss,kev` (empty cvss = NVD has not scored it). The measurement
 //! logic is dataset-agnostic; for a headline result feed the full FIRST.org
 //! EPSS set joined with CISA KEV and NVD CVSS.
+//!
+//! Headline result on the full 2026-06-16 snapshot (340,656 CVEs with an EPSS
+//! score, 1,622 on CISA KEV): the composite cuts the mean rank of exploited
+//! (KEV) CVEs from ~80,100 under a CVSS-only sort to ~2,210 — exploited bugs
+//! land in the top ~0.6% instead of the middle of the pack. CVSS-only can't
+//! separate the exploited 9.8s from the thousands of non-exploited 9.8s; the
+//! KEV/EPSS-aware composite can. Reproduce via `scripts/fetch_nvd_cvss.ps1` +
+//! `scripts/join_ff2.ps1` then `-- ff2 data/real/ff2-real.csv`.
 
 use argus_core::{
     Confidence, Criticality, Cvss, Epss, Exposure, RiskScore, Severity, Vulnerability,
