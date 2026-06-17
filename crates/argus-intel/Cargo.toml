@@ -1,6 +1,6 @@
 [package]
 name = "argus-intel"
-description = "Argus device classification: vendor/port/service signals → device class (with a trained-model seam)."
+description = "Argus device classification: heuristic vendor/port/service signals → device class (trained-model seam for later)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -8,6 +8,24 @@
 
 ---
 
+## 0. Statushinweis (aktualisiert 2026-06)
+
+**Dieses Dokument ist der ursprüngliche Vision-Entwurf vom 2026-06-03 — nicht der
+Implementierungsstand.** Der real umgesetzte Stand steht in
+[`ROADMAP.md`](../../../ROADMAP.md). Teile dieser Spec sind bewusst Vision/Ausblick
+und **noch nicht gebaut**; sie sind im Text mit **[geplant]** markiert.
+
+| Bereich | Umgesetzt | Vision / [geplant] |
+|---|---|---|
+| Crates | 7: `argus-core` (inkl. Risk-Scoring), `-discovery`, `-intel`, `-vuln`, `-policy`, `-report`, `-api` | `argus-sensor`, `-behavior`, `-connectors`, `-ingest`; ein eigenes `argus-risk` (liegt in `argus-core`) |
+| API | REST + JSON (axum, HTTP) | WebSocket, GraphQL |
+| Infrastruktur | Postgres (sqlx) | Redis (Queue/Cache) |
+| Mandantentrennung | app-seitig (jede Query `tenant_id`-gescoped) | Postgres Row-Level-Security |
+| Klassifikation | heuristisch (Vendor/Ports/Services/OS) | trainiertes ML-Modell (über `Classifier`-Trait) |
+| Frontend | Next.js + Tailwind; SVG-/Div-Dashboards, Subnetz-/Risk-Views | Framer Motion, force-directed Asset-Graph (Cytoscape/Sigma), Three.js, TanStack Query |
+
+---
+
 ## 1. Vision (ein Satz)
 
 Eine cloud-native Plattform, die jedes Gerät in einem Netz **kontinuierlich entdeckt,
@@ -25,12 +43,18 @@ einer Konsole, die in einem Demo Leute umhaut.
 
 **Substitution der einen nicht-replizierbaren Box:** Armis' crowdsourced Knowledge Base
 ersetzen wir durch **(a)** offene Fingerprint-Datenbanken (Fingerbank, IEEE-OUI,
-Nmap-OS/Service-DB, p0f-Signaturen), **(b)** einen **selbst trainierten
-Geräte-Klassifikator** auf kuratierten Open-Data + eigenen Lab-Captures, **(c)**
-**per-Deployment-Verhaltens-Baselines** (Anomalie-Erkennung ohne Cross-Customer-Daten).
+Nmap-OS/Service-DB, p0f-Signaturen), **(b)** einen Geräte-Klassifikator — aktuell
+**heuristisch** (Vendor/Ports/Services/OS), ein **[geplant]** trainiertes Modell
+steckt über die `Classifier`-Trait ein — auf kuratierten Open-Data + eigenen
+Lab-Captures, **(c)** **[geplant]** per-Deployment-Verhaltens-Baselines
+(Anomalie-Erkennung ohne Cross-Customer-Daten).
 → Die Architektur-Box bleibt identisch, nur ihre Datenquelle ist anders.
 
 ## 3. Referenz-Architektur (Armis) → unser Mirror
+
+> **[Stand]** Diese Tabelle ist der Voll-Mirror (Vision). Pendants in noch nicht
+> gebauten Crates (`argus-sensor`, `-behavior`, `-connectors`, `-ingest`) sind
+> **[geplant]** (siehe §0). Risk-Scoring liegt in `argus-core`, nicht in `argus-risk`.
 
 | Armis-Komponente | Funktion | Unser Pendant (Crate/Service) |
 |---|---|---|
@@ -39,9 +63,9 @@ Geräte-Klassifikator** auf kuratierten Open-Data + eigenen Lab-Captures, **(c)*
 | Aktive Erkennung (ergänzend) | Hosts/Ports/Services scannen | `argus-discovery` (nmap/masscan/arp-scan/naabu) |
 | Ingestion & Normalization | Rohdaten vereinheitlichen | `argus-ingest` |
 | Unified Asset Inventory | 1 Record je realem Gerät (Dedup) | `argus-core` (Asset-Graph + Dedup-Engine) |
-| **Asset Intelligence Engine** | Geräte klassifizieren/baselinen | `argus-intel` (Open-Fingerprint-DBs + ML-Klassifikator) |
+| **Asset Intelligence Engine** | Geräte klassifizieren/baselinen | `argus-intel` (Open-Fingerprint-DBs + heuristischer Klassifikator; ML **[geplant]**) |
 | Vulnerability-Korrelation | CVE ↔ Asset matchen | `argus-vuln` (NVD/KEV/EPSS CPE-Match + nuclei/OpenVAS) |
-| Risk Engine | Risiko-Score je Asset & Org | `argus-risk` |
+| Risk Engine | Risiko-Score je Asset & Org | `argus-core` (`risk.rs`), orchestriert von `argus-api`/`argus-vuln` |
 | Policy & Enforcement | Policy-Verstöße erkennen/durchsetzen | `argus-policy` (advisory + opt. NAC/Firewall) |
 | Behavioral Anomaly Detection | Abweichung vom Geräte-Baseline | `argus-behavior` |
 | Multi-Tenant Cloud Platform | Mandanten, API, Auth | `argus-api` (axum, RBAC, Multi-Tenant) |
@@ -51,26 +75,31 @@ Geräte-Klassifikator** auf kuratierten Open-Data + eigenen Lab-Captures, **(c)*
 
 ```
 argus/
-├─ crates/
-│  ├─ argus-core         # Domänenmodell, Asset-Graph, Dedup, gemeinsame Typen
-│  ├─ argus-discovery    # aktive Erkennung (Tool-Orchestrierung)
-│  ├─ argus-sensor       # passives Sensing (pcap/Zeek/p0f)            [P2]
-│  ├─ argus-intel        # Fingerprinting + Klassifikator
-│  ├─ argus-vuln         # CVE-Korrelation
-│  ├─ argus-risk         # Exposure-/Risk-Scoring
-│  ├─ argus-behavior     # Anomalie-Baselines                          [P2]
-│  ├─ argus-policy       # Policy-Engine (advisory)                    [P3]
-│  ├─ argus-connectors   # externe Integrationen                       [P2]
-│  ├─ argus-ingest       # Normalisierungs-Pipeline
-│  ├─ argus-report       # Compliance-/Exec-Reports                    [P3]
-│  └─ argus-api          # axum HTTP/WS/GraphQL, Auth, Multi-Tenant
-└─ web/                  # argus-web: Next.js/TS Frontend
+├─ crates/                 # umgesetzt (7 Crates):
+│  ├─ argus-core           # Domänenmodell, Dedup, Risk-Scoring (risk.rs), gemeinsame Typen
+│  ├─ argus-discovery      # aktive Erkennung (Tool-Orchestrierung: nmap/masscan/ARP)
+│  ├─ argus-intel          # heuristisches Fingerprinting + Geräte-Klassifikation
+│  ├─ argus-vuln           # CVE-Korrelation (NVD/KEV/EPSS) + Match-Confidence
+│  ├─ argus-policy         # Policy-Engine (advisory Segmentierung)
+│  ├─ argus-report         # Exposure-/Posture-Reports
+│  └─ argus-api            # axum HTTP (REST/JSON), Auth, Multi-Tenant, Scheduler
+├─ web/                    # Next.js/TS-Konsole (Dashboards, Subnetz-/Risk-Views)
+└─ [geplant] (noch nicht gebaut):
+   ├─ argus-sensor         # passives Sensing (pcap/Zeek/p0f)            [P2]
+   ├─ argus-behavior       # Anomalie-Baselines                         [P2]
+   ├─ argus-connectors     # externe Integrationen (Cloud/AD/NetBox)    [P2]
+   └─ argus-ingest         # Normalisierungs-Pipeline                   [P2]
+   # Risk-Scoring liegt in argus-core; kein eigenes argus-risk-Crate.
 ```
 
 Konventionen wie SecurityToolKMU: `unsafe_code = "forbid"`, clippy pedantic+nursery,
 `tracing`, `anyhow`/`thiserror`, cargo-deny, ADRs unter `docs/adr/`.
 
 ## 5. Datenmodell (Kern-Entities)
+
+> **[Stand]** Umgesetzt: Tenant, User, Asset, Interface, Service (mit CPE),
+> Vulnerability (inkl. Match-Confidence), Finding, RiskScore, Monitor + ChangeEvent.
+> **[geplant]:** eigenständige Software-, Sensor/ScanJob-, Alert- und Baseline-Entities.
 
 - **Tenant** (Org) → isoliert alle Daten. **User** (RBAC: Admin/Analyst/Viewer).
 - **Asset** — ein reales Gerät. Dedup-Key über MAC/IP/Hostname/Fingerprint-Korrelation.
@@ -84,17 +113,23 @@ Konventionen wie SecurityToolKMU: `unsafe_code = "forbid"`, clippy pedantic+nurs
 
 ## 6. Tech-Stack + Begründung
 
-- **Backend:** Rust · axum (HTTP/WS) · sqlx + **Postgres** · Tokio · async-trait ·
-  Redis (Job-Queue/Cache) · `tracing`. Begründung: vorhandene Rust-Stärke, Performance,
-  ein Sprach-Stack über alle Engines.
-- **Frontend:** TypeScript · **Next.js (React)** · Tailwind · **Framer Motion**
-  (Animationen) · **Cytoscape.js / Sigma.js** (Asset-Graph) · **Three.js** (3D-Hero) ·
-  TanStack Query · WebSocket-Client.
-- **Auth:** JWT/Session, RBAC, API-Keys; Tenant-Isolation per row-level (tenant_id) +
-  Postgres RLS.
+- **Backend:** Rust · axum (REST/JSON über HTTP) · sqlx + **Postgres** · Tokio ·
+  `tracing`. **[geplant]:** WebSocket, GraphQL, Redis (Queue/Cache) — derzeit nicht
+  enthalten. Begründung: vorhandene Rust-Stärke, Performance, ein Sprach-Stack.
+- **Frontend:** TypeScript · **Next.js (React)** · **Tailwind** · hand-gerollte
+  SVG-/Div-Visualisierungen (Dashboards, Subnetz-/Risk-Views). **[geplant]:** Framer
+  Motion, force-directed Asset-Graph (Cytoscape.js/Sigma.js), Three.js, TanStack
+  Query, WebSocket-Client.
+- **Auth:** JWT/Session, RBAC, API-Keys; Tenant-Isolation **app-seitig** (jede Query
+  `tenant_id`-gescoped). **[geplant]:** zusätzlich Postgres Row-Level-Security.
 - **Deployment:** Container (Docker), 12-factor, cloud-native; lokal via docker-compose.
 
 ## 7. Der Wow-Layer (Frontend) — konkret
+
+> **[Stand]** Umgesetzt sind Dashboards, Subnetz-/Netzwerk-View, Risk-Verteilung,
+> Device-Detail-Drawer und Empty-States — als hand-gerollte SVG-/Div-Komponenten.
+> Der **force-directed Asset-Graph (WebGL)**, **Three.js** und
+> **Framer-Motion-Animationen** sind **[geplant]**, nicht gebaut.
 
 1. **Hero Asset-Graph** — force-directed, WebGL, Geräte als Icon-Nodes, Kanten =
    Verbindungen, Farbe = Risiko. Zoom/Pan, Live-Updates.

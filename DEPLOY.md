@@ -55,13 +55,13 @@ scoped by `tenant_id` in every query.
 | Env var                | Default                                          | Where |
 |------------------------|--------------------------------------------------|-------|
 | `DATABASE_URL`         | `postgresql://argus:argus@postgres:5432/argus`   | api |
-| `ARGUS_BIND`           | `0.0.0.0:8088`                                   | api |
+| `ARGUS_BIND`           | `127.0.0.1:8088`                                 | api — code default; docker-compose sets `0.0.0.0:8088` for the container |
 | `ARGUS_JWT_SECRET`     | *(ephemeral random — set this in production!)*   | api — 32+ chars; unset means sessions die on restart |
 | `ARGUS_TOKEN_TTL_HOURS`| `12`                                             | api |
 | `ARGUS_CORS_ORIGIN`    | `http://localhost:3000,http://127.0.0.1:3000`    | api — comma-separated browser origins |
 | `ARGUS_ADMIN_EMAIL`    | `admin@argus.local`                              | api — bootstrap admin (first run only) |
 | `ARGUS_ADMIN_PASSWORD` | *(generated, printed once in the log)*           | api — first run only |
-| `ARGUS_SIGNUP_ENABLED` | `true`                                           | api — self-service tenant signup |
+| `ARGUS_SIGNUP_ENABLED` | `false`                                          | api — self-service signup (code default off; the compose dev setup sets `true`) |
 | `ARGUS_SEED_DEMO`      | `true`                                           | api — demo assets in the bootstrap tenant |
 | `NVD_API_KEY`          | *(unset — NVD lookups paced to 5 req / 30 s)*    | api — [free key](https://nvd.nist.gov/developers/request-an-api-key) lifts live CVE lookups to 50 req / 30 s |
 | `ARGUS_INTEL_CACHE`    | `intel-cache.json`                               | api — snapshot file for the live-intel cache (NVD/KEV/EPSS) so it survives restarts; set empty to disable |
