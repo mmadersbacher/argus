@@ -1,0 +1,15 @@
+[package]
+name = "argus-sensor"
+description = "Argus passive sensing: derive OS/device identity from observed packet features (p0f-style TCP-SYN + DHCP fingerprints). Analysis is pure; packet capture is a separate, privileged layer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-core = { path = "../argus-core" }

@@ -118,6 +118,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "argus-sensor"
+version = "0.1.0"
+dependencies = [
+ "argus-core",
+]
+
+[[package]]
 name = "argus-vuln"
 version = "0.1.0"
 dependencies = [
