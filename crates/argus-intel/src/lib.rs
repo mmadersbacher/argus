@@ -154,152 +154,332 @@ pub fn classify(features: &Features) -> Classification {
     HeuristicClassifier.classify(features)
 }
 
-/// Map an OUI vendor string to a device-class hint.
+/// Map an OUI vendor string to a device-class hint, evaluated top-down so the
+/// most specific classes win first.
 ///
-/// Vendor is the strongest single identity signal, so the order resolves the
-/// most specific classes (medical, industrial, cameras) before generic IT.
+/// Vendor (physical identity) is the strongest single signal — but only for
+/// vendors with one dominant device role. Multi-role makers that also build
+/// PCs and printers (Hewlett-Packard, ASUS) are deliberately *absent* so the
+/// service/port profile decides instead of mis-typing an HP printer as a
+/// workstation. Ambiguous consumer brands (Apple, Samsung, Amazon, Google)
+/// fall through to a coarse consumer class that a service/port signal refines.
+///
+/// `(vendor substrings, class, label)` — first row with a matching substring
+/// wins, so order is most-specific-first.
+const VENDOR_RULES: &[(&[&str], AssetType, &str)] = &[
+    (
+        &[
+            "ge healthcare",
+            "philips healthcare",
+            "medtronic",
+            "draeger",
+            "dräger",
+            "baxter",
+            "hillrom",
+            "siemens healthineers",
+        ],
+        AssetType::Iomt,
+        "medical-device",
+    ),
+    (
+        &[
+            "rockwell",
+            "allen-bradley",
+            "schneider electric",
+            "mitsubishi electric",
+            "yokogawa",
+            "beckhoff",
+            "wago",
+            "emerson",
+        ],
+        AssetType::Ot,
+        "industrial-controller",
+    ),
+    (
+        &[
+            "hikvision",
+            "dahua",
+            "reolink",
+            "amcrest",
+            "foscam",
+            "axis communications",
+            "wyze",
+            "hualai",
+            "eufy",
+            "mobotix",
+            "lorex",
+            "vivotek",
+            "hanwha",
+            "uniview",
+            "arlo",
+        ],
+        AssetType::Iot,
+        "ip-camera",
+    ),
+    (
+        &[
+            "seiko epson",
+            "brother",
+            "lexmark",
+            "kyocera",
+            "ricoh",
+            "oki data",
+            "konica minolta",
+            "pantum",
+            "zhuhai pantum",
+            "zhuhai seine",
+            "xerox",
+            "zebra technologies",
+            "dymo",
+            "canon",
+        ],
+        AssetType::Iot,
+        "printer",
+    ),
+    (
+        &[
+            "synology",
+            "qnap",
+            "asustor",
+            "terra-master",
+            "terramaster",
+            "buffalo",
+            "drobo",
+            "data robotics",
+            "western digital",
+        ],
+        AssetType::It,
+        "nas-storage",
+    ),
+    (
+        &[
+            "polycom",
+            "plantronics",
+            "yealink",
+            "grandstream",
+            "snom",
+            "gigaset",
+            "avaya",
+        ],
+        AssetType::Iot,
+        "voip-phone",
+    ),
+    (&["sonos"], AssetType::Iot, "smart-speaker"),
+    (
+        &[
+            "fortinet",
+            "palo alto",
+            "sonicwall",
+            "check point",
+            "watchguard",
+        ],
+        AssetType::Network,
+        "firewall",
+    ),
+    (
+        &[
+            "avm",
+            "netgear",
+            "tp-link",
+            "ubiquiti",
+            "linksys",
+            "d-link",
+            "zyxel",
+            "mikrotik",
+            "routerboard",
+            "devolo",
+            "eero",
+            "aruba",
+            "ruckus",
+            "cisco",
+            "juniper",
+            "arista",
+        ],
+        AssetType::Network,
+        "network-device",
+    ),
+    (&["vmware", "nutanix"], AssetType::It, "virtual-machine"),
+    (&["raspberry"], AssetType::Iot, "raspberry-pi"),
+    // Ambiguous consumer brands: coarse class, refined later by service/port.
+    (&["apple"], AssetType::Mobile, "apple-device"),
+    (
+        &["nintendo", "sony interactive", "sony computer"],
+        AssetType::Mobile,
+        "game-console",
+    ),
+    (
+        &["xiaomi", "fitbit", "garmin"],
+        AssetType::Mobile,
+        "mobile-device",
+    ),
+    (
+        &[
+            "amazon",
+            "google",
+            "espressif",
+            "tuya",
+            "shelly",
+            "sonoff",
+            "itead",
+            "belkin",
+            "philips lighting",
+            "signify",
+            "lutron",
+            "ecobee",
+            "ikea",
+            "lumi united",
+        ],
+        AssetType::Iot,
+        "consumer-iot",
+    ),
+    (
+        &[
+            "samsung",
+            "lg electronics",
+            "lg innotek",
+            "sony",
+            "hisense",
+            "vizio",
+            "roku",
+            "nvidia",
+        ],
+        AssetType::Iot,
+        "consumer-electronics",
+    ),
+    (
+        &["dell", "lenovo", "supermicro", "fujitsu", "intel corporate"],
+        AssetType::It,
+        "server-or-workstation",
+    ),
+    (&["microsoft"], AssetType::It, "windows-host"),
+];
+
 fn vendor_hint(vendor: &str) -> Option<(AssetType, &'static str)> {
     let v = vendor.to_lowercase();
-    let has = |needle: &str| v.contains(needle);
-    if has("ge healthcare")
-        || has("philips")
-        || has("medtronic")
-        || has("draeger")
-        || has("dräger")
-        || has("baxter")
-        || has("hillrom")
-        || has("siemens healthineers")
-    {
-        Some((AssetType::Iomt, "medical-device"))
-    } else if has("hikvision")
-        || has("dahua")
-        || has("axis communications")
-        || has("hanwha")
-        || has("vivotek")
-        || has("uniview")
-    {
-        Some((AssetType::Iot, "ip-camera"))
-    } else if has("siemens")
-        || has("rockwell")
-        || has("schneider")
-        || has("allen-bradley")
-        || has("mitsubishi electric")
-        || has("yokogawa")
-        || has("honeywell")
-        || has("abb")
-        || has("emerson")
-        || has("beckhoff")
-        || has("wago")
-    {
-        Some((AssetType::Ot, "industrial-controller"))
-    } else if has("fortinet")
-        || has("palo alto")
-        || has("sonicwall")
-        || has("check point")
-        || has("watchguard")
-    {
-        Some((AssetType::Network, "firewall"))
-    } else if has("cisco")
-        || has("juniper")
-        || has("arista")
-        || has("ubiquiti")
-        || has("netgear")
-        || has("aruba")
-        || has("ruckus")
-        || has("mikrotik")
-        || has("tp-link")
-        || has("zyxel")
-    {
-        Some((AssetType::Network, "network-device"))
-    } else if has("synology") || has("qnap") || has("western digital") || has("netapp") {
-        Some((AssetType::It, "nas-storage"))
-    } else if has("hewlett") && has("print")
-        || has("brother")
-        || has("lexmark")
-        || has("canon")
-        || has("xerox")
-        || has("kyocera")
-        || has("ricoh")
-    {
-        Some((AssetType::Iot, "printer"))
-    } else if has("vmware") || has("nutanix") || has("citrix") {
-        Some((AssetType::It, "virtual-machine"))
-    } else if has("amazon")
-        || has("google")
-        || has("microsoft azure")
-        || has("digitalocean")
-        || has("hetzner")
-    {
-        Some((AssetType::Cloud, "cloud-instance"))
-    } else if has("apple") {
-        Some((AssetType::Mobile, "apple-device"))
-    } else if has("samsung")
-        || has("lg electronics")
-        || has("sonos")
-        || has("roku")
-        || has("espressif")
-    {
-        Some((AssetType::Iot, "consumer-iot"))
-    } else if has("raspberry") {
-        Some((AssetType::Iot, "raspberry-pi"))
-    } else if has("dell")
-        || has("hewlett")
-        || has("supermicro")
-        || has("lenovo")
-        || has("intel")
-        || has("fujitsu")
-    {
-        Some((AssetType::It, "server-or-workstation"))
-    } else if has("microsoft") {
-        Some((AssetType::It, "windows-host"))
-    } else {
-        None
-    }
+    VENDOR_RULES
+        .iter()
+        .find(|(needles, _, _)| needles.iter().any(|n| v.contains(n)))
+        .map(|&(_, asset_type, label)| (asset_type, label))
 }
+
+/// Service/CPE identity tokens — `(token, class, label)`, matched whole (never
+/// as a substring); only high-signal, collision-free tokens (no
+/// "switch"/"nest"/"ring").
+const SERVICE_RULES: &[(&str, AssetType, &str)] = &[
+    // cameras / NVRs
+    ("hikvision", AssetType::Iot, "ip-camera"),
+    ("dahua", AssetType::Iot, "ip-camera"),
+    ("vivotek", AssetType::Iot, "ip-camera"),
+    ("reolink", AssetType::Iot, "ip-camera"),
+    ("amcrest", AssetType::Iot, "ip-camera"),
+    ("foscam", AssetType::Iot, "ip-camera"),
+    ("vapix", AssetType::Iot, "ip-camera"),
+    ("dvrdvs", AssetType::Iot, "ip-camera"),
+    ("mobotix", AssetType::Iot, "ip-camera"),
+    ("lorex", AssetType::Iot, "ip-camera"),
+    // printing
+    ("jetdirect", AssetType::Iot, "printer"),
+    ("laserjet", AssetType::Iot, "printer"),
+    ("officejet", AssetType::Iot, "printer"),
+    ("deskjet", AssetType::Iot, "printer"),
+    ("pixma", AssetType::Iot, "printer"),
+    ("imageclass", AssetType::Iot, "printer"),
+    ("maxify", AssetType::Iot, "printer"),
+    ("syncthru", AssetType::Iot, "printer"),
+    ("ecosys", AssetType::Iot, "printer"),
+    ("taskalfa", AssetType::Iot, "printer"),
+    ("bizhub", AssetType::Iot, "printer"),
+    ("aficio", AssetType::Iot, "printer"),
+    ("workcentre", AssetType::Iot, "printer"),
+    ("versalink", AssetType::Iot, "printer"),
+    ("phaser", AssetType::Iot, "printer"),
+    ("marknet", AssetType::Iot, "printer"),
+    ("labelwriter", AssetType::Iot, "printer"),
+    ("zebranet", AssetType::Iot, "printer"),
+    ("cups", AssetType::Iot, "printer"),
+    ("printer", AssetType::Iot, "printer"),
+    // smart TVs / media streamers
+    ("tizen", AssetType::Iot, "smart-tv"),
+    ("webos", AssetType::Iot, "smart-tv"),
+    ("netcast", AssetType::Iot, "smart-tv"),
+    ("bravia", AssetType::Iot, "smart-tv"),
+    ("aquos", AssetType::Iot, "smart-tv"),
+    ("vidaa", AssetType::Iot, "smart-tv"),
+    ("smartcast", AssetType::Iot, "smart-tv"),
+    ("roku", AssetType::Iot, "media-streamer"),
+    ("chromecast", AssetType::Iot, "media-streamer"),
+    ("googlecast", AssetType::Iot, "media-streamer"),
+    ("firetv", AssetType::Iot, "media-streamer"),
+    ("plexmediaserver", AssetType::It, "media-server"),
+    // smart speakers / voice
+    ("sonos", AssetType::Iot, "smart-speaker"),
+    ("zoneplayer", AssetType::Iot, "smart-speaker"),
+    ("alexa", AssetType::Iot, "smart-speaker"),
+    ("airplay", AssetType::Iot, "media-streamer"),
+    // VoIP phones
+    ("polycom", AssetType::Iot, "voip-phone"),
+    ("soundpoint", AssetType::Iot, "voip-phone"),
+    ("yealink", AssetType::Iot, "voip-phone"),
+    ("grandstream", AssetType::Iot, "voip-phone"),
+    ("snom", AssetType::Iot, "voip-phone"),
+    // smart-home hubs / devices
+    ("ipbridge", AssetType::Iot, "smart-home"),
+    ("kasa", AssetType::Iot, "smart-home"),
+    ("shelly", AssetType::Iot, "smart-home"),
+    ("sonoff", AssetType::Iot, "smart-home"),
+    ("tasmota", AssetType::Iot, "smart-home"),
+    ("esphome", AssetType::Iot, "smart-home"),
+    ("wemo", AssetType::Iot, "smart-home"),
+    ("tradfri", AssetType::Iot, "smart-home"),
+    // game consoles
+    ("playstation", AssetType::Mobile, "game-console"),
+    ("nintendo", AssetType::Mobile, "game-console"),
+    ("xbox", AssetType::Mobile, "game-console"),
+    // routers / network OS
+    ("routeros", AssetType::Network, "network-device"),
+    ("mikrotik", AssetType::Network, "network-device"),
+    ("openwrt", AssetType::Network, "network-device"),
+    ("vyos", AssetType::Network, "network-device"),
+    ("asuswrt", AssetType::Network, "network-device"),
+    ("edgeos", AssetType::Network, "network-device"),
+    ("edgerouter", AssetType::Network, "network-device"),
+    ("airos", AssetType::Network, "network-device"),
+    ("pfsense", AssetType::Network, "network-device"),
+    ("opnsense", AssetType::Network, "network-device"),
+    ("fortios", AssetType::Network, "firewall"),
+    ("fortinet", AssetType::Network, "firewall"),
+    // virtualization
+    ("esxi", AssetType::It, "virtualization-host"),
+    ("vcenter", AssetType::It, "virtualization-host"),
+    ("proxmox", AssetType::It, "virtualization-host"),
+    // storage / NAS
+    ("synology", AssetType::It, "nas-storage"),
+    ("diskstation", AssetType::It, "nas-storage"),
+    ("rackstation", AssetType::It, "nas-storage"),
+    ("qnap", AssetType::It, "nas-storage"),
+    ("asustor", AssetType::It, "nas-storage"),
+    ("terramaster", AssetType::It, "nas-storage"),
+    ("truenas", AssetType::It, "nas-storage"),
+    ("freenas", AssetType::It, "nas-storage"),
+    ("openmediavault", AssetType::It, "nas-storage"),
+    ("unraid", AssetType::It, "nas-storage"),
+    // embedded
+    ("dropbear", AssetType::Iot, "embedded-device"),
+    ("busybox", AssetType::Iot, "embedded-device"),
+    ("lwip", AssetType::Iot, "embedded-device"),
+    // windows software stack (generic — keep after everything specific)
+    ("iis", AssetType::It, "windows-host"),
+    ("exchange", AssetType::It, "windows-host"),
+    ("windows", AssetType::It, "windows-host"),
+];
 
 /// Identity evidence from service products and application CPEs.
 ///
-/// First match wins, so rules are ordered most-specific first. Matching is
-/// whole-token (split on non-alphanumerics) over the lowercased product
-/// strings plus the vendor/product components of each CPE — `"Apache Axis"`
-/// must not look like an Axis camera, but `cpe:/a:mikrotik:routeros` must
-/// hit the `routeros` rule.
+/// First match wins, rules ordered most-specific first. Matching is whole-token
+/// (split on non-alphanumerics) over the lowercased product strings plus the
+/// vendor/product components of each CPE — `"Apache Axis"` must not look like an
+/// Axis camera, but `cpe:/a:mikrotik:routeros` must hit the `routeros` rule.
 fn service_hint(services: &[String], cpes: &[String]) -> Option<(AssetType, &'static str, String)> {
-    /// (token, class, label) — token is matched whole, never as a substring.
-    const RULES: &[(&str, AssetType, &str)] = &[
-        // cameras / NVRs
-        ("hikvision", AssetType::Iot, "ip-camera"),
-        ("dahua", AssetType::Iot, "ip-camera"),
-        ("vivotek", AssetType::Iot, "ip-camera"),
-        // routers / network OS
-        ("routeros", AssetType::Network, "network-device"),
-        ("mikrotik", AssetType::Network, "network-device"),
-        ("openwrt", AssetType::Network, "network-device"),
-        ("vyos", AssetType::Network, "network-device"),
-        ("fortios", AssetType::Network, "firewall"),
-        ("fortinet", AssetType::Network, "firewall"),
-        // virtualization
-        ("esxi", AssetType::It, "virtualization-host"),
-        ("vcenter", AssetType::It, "virtualization-host"),
-        ("proxmox", AssetType::It, "virtualization-host"),
-        // storage
-        ("synology", AssetType::It, "nas-storage"),
-        ("qnap", AssetType::It, "nas-storage"),
-        ("truenas", AssetType::It, "nas-storage"),
-        // printing
-        ("jetdirect", AssetType::Iot, "printer"),
-        ("cups", AssetType::Iot, "printer"),
-        ("printer", AssetType::Iot, "printer"),
-        // embedded
-        ("dropbear", AssetType::Iot, "embedded-device"),
-        ("busybox", AssetType::Iot, "embedded-device"),
-        ("lwip", AssetType::Iot, "embedded-device"),
-        // windows software stack (generic — keep after everything specific)
-        ("iis", AssetType::It, "windows-host"),
-        ("exchange", AssetType::It, "windows-host"),
-        ("windows", AssetType::It, "windows-host"),
-    ];
-
     let mut tokens: Vec<String> = Vec::new();
     for s in services {
         tokens.extend(
@@ -325,7 +505,7 @@ fn service_hint(services: &[String], cpes: &[String]) -> Option<(AssetType, &'st
             }
         }
     }
-    RULES
+    SERVICE_RULES
         .iter()
         .find(|(needle, _, _)| tokens.iter().any(|t| t == needle))
         .map(|&(needle, asset_type, label)| (asset_type, label, needle.to_owned()))
@@ -565,5 +745,75 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(classify(&db).device_type, "database-server");
+    }
+
+    #[test]
+    fn home_device_vendors_classify() {
+        let cases = [
+            ("Seiko Epson Corporation", AssetType::Iot, "printer"),
+            ("Brother Industries, Ltd.", AssetType::Iot, "printer"),
+            ("Reolink", AssetType::Iot, "ip-camera"),
+            ("Synology Incorporated", AssetType::It, "nas-storage"),
+            ("AVM GmbH", AssetType::Network, "network-device"),
+            ("Sonos, Inc.", AssetType::Iot, "smart-speaker"),
+            ("Yealink Network Technology", AssetType::Iot, "voip-phone"),
+        ];
+        for (vendor, want_type, want_label) in cases {
+            let c = classify(&Features {
+                vendor: Some(vendor.into()),
+                ..Default::default()
+            });
+            assert_eq!(c.asset_type, want_type, "{vendor}");
+            assert_eq!(c.device_type, want_label, "{vendor}");
+        }
+    }
+
+    #[test]
+    fn ambiguous_consumer_brands_are_consumer_not_cloud() {
+        // Amazon/Google OUIs in a home net are Echo/Chromecast/Nest, not cloud.
+        for vendor in ["Amazon Technologies Inc.", "Google, Inc."] {
+            assert_eq!(
+                classify(&Features {
+                    vendor: Some(vendor.into()),
+                    ..Default::default()
+                })
+                .asset_type,
+                AssetType::Iot,
+                "{vendor}"
+            );
+        }
+    }
+
+    #[test]
+    fn hp_is_typed_by_port_or_service_not_vendor() {
+        // HP makes both PCs and printers, so its OUI must not force a class:
+        // a port-9100 HP host is a printer, a 445/3389 HP host is a windows box.
+        let printer = classify(&Features {
+            vendor: Some("Hewlett Packard".into()),
+            open_ports: vec![80, 9100],
+            ..Default::default()
+        });
+        assert_eq!(printer.device_type, "printer");
+        let pc = classify(&Features {
+            vendor: Some("Hewlett Packard".into()),
+            open_ports: vec![445, 3389],
+            ..Default::default()
+        });
+        assert_eq!(pc.device_type, "windows-host");
+    }
+
+    #[test]
+    fn service_tokens_type_tvs_and_streamers() {
+        let tv = classify(&Features {
+            services: vec!["Samsung Tizen SmartTV".into()],
+            open_ports: vec![8001],
+            ..Default::default()
+        });
+        assert_eq!(tv.device_type, "smart-tv");
+        let cast = classify(&Features {
+            services: vec!["Chromecast".into()],
+            ..Default::default()
+        });
+        assert_eq!(cast.device_type, "media-streamer");
     }
 }
