@@ -7,6 +7,8 @@ use argus_core::MacAddr;
 const CANDIDATE_PATHS: &[&str] = &[
     "/usr/share/nmap/nmap-mac-prefixes",
     "/usr/local/share/nmap/nmap-mac-prefixes",
+    "C:\\Program Files (x86)\\Nmap\\nmap-mac-prefixes",
+    "C:\\Program Files\\Nmap\\nmap-mac-prefixes",
 ];
 
 /// An OUI (24-bit MAC prefix) → vendor lookup table.

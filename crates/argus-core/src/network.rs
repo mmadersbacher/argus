@@ -18,12 +18,13 @@ impl MacAddr {
         [self.0[0], self.0[1], self.0[2]]
     }
 
-    /// Parse a canonical `aa:bb:cc:dd:ee:ff` MAC string.
+    /// Parse a MAC string with `:` or `-` separators (`aa:bb:cc:dd:ee:ff` or the
+    /// `aa-bb-cc-dd-ee-ff` form Windows `arp -a` prints).
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let mut bytes = [0u8; 6];
         let mut count = 0usize;
-        for part in s.split(':') {
+        for part in s.split([':', '-']) {
             if count >= 6 {
                 return None;
             }
