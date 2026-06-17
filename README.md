@@ -40,10 +40,12 @@ crates/
   argus-discovery    # active discovery (nmap/masscan/arp-scan)   [P1]
   argus-vuln         # CVE correlation, live NVD/EPSS/KEV intel   [P1/P3]
   argus-intel        # heuristic device classification            [P1]
+  argus-sensor       # passive fingerprint analysis (capture WIP) [P2]
   argus-report       # exposure / posture reports                 [P3]
   argus-policy       # advisory segmentation rules                [P3]
   argus-api          # axum HTTP, Postgres, auth, multi-tenant    [P0..P3]
-  ...                # sensor, behavior, connectors               [P2/P3]
+  argus-eval         # FF1/FF2 research-question harnesses        [thesis]
+  ...                # behavior, connectors                       [P2/P3]
 web/                 # Next.js console                            [P0/P1]
 ```
 
