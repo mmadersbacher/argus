@@ -37,8 +37,9 @@ score backed only by version-blind matches is visibly less certain.
 
 What is explicitly **not** done: this is a P1 analytical spine, not a finished
 product. Scoring weights are an honest heuristic, not a calibrated model; the
-offline catalog is a ~40-CVE baseline; the device classifier is heuristic
-(no trained model); there is no passive sensing, no connectors, no billing, and
+offline catalog is a ~75-CVE baseline; the device classifier is heuristic
+(no trained model); passive-sensing **analysis** exists (`argus-sensor`) but
+live packet capture is not yet wired; there are no connectors, no billing, and
 the central scanner reaches targets directly (no agent/relay model yet).
 
 ---
@@ -141,7 +142,9 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
 
 - [ ] `argus-intel`: a *trained* device classifier (Fingerbank-style features) —
       today's classifier is heuristic rules and is labeled as such.
-- [ ] `argus-sensor`: passive sensing (p0f/Zeek-style signatures)
+- [~] `argus-sensor`: passive-sensing **analysis** built + unit-tested (p0f-style
+      TCP-SYN, DHCP option 55/60, HTTP User-Agent, agreement-weighted fusion);
+      live packet **capture** (libpcap/Npcap, privileged) is not yet wired
 - [ ] `argus-connectors`: cloud/AD/NetBox adapters (also the real source of
       VLAN/switch telemetry that would replace the policy engine's `/24` zone
       approximation)

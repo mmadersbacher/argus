@@ -26,8 +26,8 @@ built entirely on open-source data and tooling. It is **not** affiliated with Ar
 - **Correlate** vulnerabilities (NVD CPE + EPSS + CISA KEV), each tagged with a
   **match confidence** (CPE + version vs. version-blind) that flows into the score.
 - **Score** per-asset exposure/risk, carrying the driving match's confidence.
-- **Visualize** everything in a web console — dashboards, subnet/network views and
-  risk breakdowns (polled near-real-time; a force-directed asset graph is planned)
+- **Visualize** everything in a web console — dashboards, subnet/network views,
+  risk breakdowns and a force-directed asset graph (Cytoscape), polled near-real-time
 
 ## Architecture
 

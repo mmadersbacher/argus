@@ -289,7 +289,10 @@ pub fn is_disallowed_target(ip: IpAddr) -> bool {
     }
     match ip {
         IpAddr::V4(v4) => v4.is_unspecified() || v4.is_broadcast() || v4.is_documentation(),
-        IpAddr::V6(v6) => v6.is_unspecified(),
+        // Mirror the IPv4 documentation block for IPv6's `2001:db8::/32`.
+        IpAddr::V6(v6) => {
+            v6.is_unspecified() || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+        }
     }
 }
 
@@ -320,8 +323,13 @@ mod tests {
         assert!(is_disallowed_target("127.0.0.1".parse().unwrap()));
         assert!(is_disallowed_target("0.0.0.0".parse().unwrap()));
         assert!(is_disallowed_target("::ffff:192.168.1.1".parse().unwrap()));
+        // IPv6 documentation range (2001:db8::/32) — blocked like IPv4's.
+        assert!(is_disallowed_target("2001:db8::1".parse().unwrap()));
         assert!(!is_disallowed_target("8.8.8.8".parse().unwrap()));
         assert!(!is_disallowed_target("1.1.1.1".parse().unwrap()));
+        assert!(!is_disallowed_target(
+            "2606:4700:4700::1111".parse().unwrap()
+        )); // public IPv6
     }
 
     #[test]

@@ -17,12 +17,12 @@ und **noch nicht gebaut**; sie sind im Text mit **[geplant]** markiert.
 
 | Bereich | Umgesetzt | Vision / [geplant] |
 |---|---|---|
-| Crates | 7: `argus-core` (inkl. Risk-Scoring), `-discovery`, `-intel`, `-vuln`, `-policy`, `-report`, `-api` | `argus-sensor`, `-behavior`, `-connectors`, `-ingest`; ein eigenes `argus-risk` (liegt in `argus-core`) |
+| Crates | 9: `argus-core` (inkl. Risk-Scoring), `-discovery`, `-intel`, `-vuln`, `-policy`, `-report`, `-api`, `-sensor` (passive Analyse; Capture [geplant]), `-eval` (FF1/FF2-Harness) | `-behavior`, `-connectors`, `-ingest`; ein eigenes `argus-risk` (liegt in `argus-core`) |
 | API | REST + JSON (axum, HTTP) | WebSocket, GraphQL |
 | Infrastruktur | Postgres (sqlx) | Redis (Queue/Cache) |
 | Mandantentrennung | app-seitig (jede Query `tenant_id`-gescoped) | Postgres Row-Level-Security |
 | Klassifikation | heuristisch (Vendor/Ports/Services/OS) | trainiertes ML-Modell (über `Classifier`-Trait) |
-| Frontend | Next.js + Tailwind; SVG-/Div-Dashboards, Subnetz-/Risk-Views | Framer Motion, force-directed Asset-Graph (Cytoscape/Sigma), Three.js, TanStack Query |
+| Frontend | Next.js + Tailwind; SVG-/Div-Dashboards, Subnetz-/Risk-Views, force-directed Asset-Graph (Cytoscape) | Framer Motion, Three.js, TanStack Query |
 
 ---
 
@@ -62,7 +62,7 @@ Lab-Captures, **(c)** **[geplant]** per-Deployment-Verhaltens-Baselines
 | 100+ Integrationen | Daten aus Firewalls/EDR/Cloud/CMDB ziehen | `argus-connectors` (Cloud/AD/NetBox/EDR) |
 | Aktive Erkennung (ergänzend) | Hosts/Ports/Services scannen | `argus-discovery` (nmap/masscan/arp-scan/naabu) |
 | Ingestion & Normalization | Rohdaten vereinheitlichen | `argus-ingest` |
-| Unified Asset Inventory | 1 Record je realem Gerät (Dedup) | `argus-core` (Asset-Record-Modell + Dedup; ein Graph-View ist **[geplant]**) |
+| Unified Asset Inventory | 1 Record je realem Gerät (Dedup) | `argus-core` (Asset-Record-Modell + Dedup); 2D-Graph-View umgesetzt (Cytoscape, `/api/graph` + `web/graph`), WebGL-Hero-Graph **[geplant]** |
 | **Asset Intelligence Engine** | Geräte klassifizieren/baselinen | `argus-intel` (Open-Fingerprint-DBs + heuristischer Klassifikator; ML **[geplant]**) |
 | Vulnerability-Korrelation | CVE ↔ Asset matchen | `argus-vuln` (NVD/KEV/EPSS CPE-Match + nuclei/OpenVAS) |
 | Risk Engine | Risiko-Score je Asset & Org | `argus-core` (`risk.rs`), orchestriert von `argus-api`/`argus-vuln` |
@@ -163,7 +163,8 @@ API-Keys je Org. Billing-ready Struktur (Plan/Quota-Felder) — Billing selbst e
 > Monitoring** — in der Spec eigentlich P2) → **P2-Intelligence zurückgestellt**.
 > Die Phasen-Nummern sind die ursprüngliche Gliederung, nicht die Ist-Reihenfolge.
 > Reale Namen: Risk-Scoring in `argus-core` (kein `argus-risk`), Konsole unter
-> `web/` (kein `argus-web`-Crate), kein force-directed Asset-Graph (SVG/Grid).
+> `web/` (kein `argus-web`-Crate). Ein 2D force-directed Asset-Graph (Cytoscape)
+> ist umgesetzt; der WebGL/Three.js-Hero-Graph bleibt [geplant].
 > Aktueller Stand: [`ROADMAP.md`](../../../ROADMAP.md).
 
 - **P0 — Foundations:** Repo, Workspace, CI, `argus-core`-Modell, Postgres-Schema,

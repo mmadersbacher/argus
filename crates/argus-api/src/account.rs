@@ -20,13 +20,35 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
 }
 
 fn validate_credentials(email: &str, password: &str) -> Result<(), (StatusCode, String)> {
-    if !email.contains('@') || email.len() < 3 {
-        return Err(bad_request("invalid email"));
+    if !is_plausible_email(email) {
+        return Err(bad_request("invalid email address"));
     }
     if password.len() < MIN_PASSWORD_LEN {
         return Err(bad_request("password must be at least 10 characters"));
     }
     Ok(())
+}
+
+/// Light structural email check: exactly one `@`, a non-empty local part, and a
+/// domain with a label and a 2+ character alphabetic TLD. Not RFC 5322 — just
+/// enough to reject the obviously-malformed (`user@`, `@d`, `a@b`) that the old
+/// `contains('@')` check let through, without pulling in a dependency.
+fn is_plausible_email(email: &str) -> bool {
+    if email.matches('@').count() != 1 {
+        return false;
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() {
+        return false;
+    }
+    match domain.rsplit_once('.') {
+        Some((host, tld)) => {
+            !host.is_empty() && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())
+        }
+        None => false,
+    }
 }
 
 /// URL-safe slug from an organization name (`Acme Corp` → `acme-corp`).
@@ -100,12 +122,24 @@ pub struct RegisterRequest {
 /// Create a new tenant with its first (admin) user and return a session.
 pub async fn register(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<SessionResponse>, (StatusCode, String)> {
     if !state.signup_enabled {
         return Err((
             StatusCode::FORBIDDEN,
             "self-service signup is disabled (ARGUS_SIGNUP_ENABLED=false)".to_owned(),
+        ));
+    }
+    // Per-IP budget so an enabled signup endpoint can't be used for tenant-spam
+    // or email-enumeration (the 409 below is an existence oracle). Mirrors login.
+    if !state
+        .limiter
+        .allow(&format!("signup:{}", addr.ip()), LoginLimiter::PER_IP_MAX)
+    {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many signup attempts — retry in a minute".to_owned(),
         ));
     }
     let organization = req.organization.trim();
@@ -454,8 +488,26 @@ mod tests {
 
     #[test]
     fn credential_validation() {
-        assert!(validate_credentials("a@b.c", "long-enough-pw").is_ok());
+        assert!(validate_credentials("user@example.com", "long-enough-pw").is_ok());
         assert!(validate_credentials("not-an-email", "long-enough-pw").is_err());
-        assert!(validate_credentials("a@b.c", "short").is_err());
+        assert!(validate_credentials("user@example.com", "short").is_err());
+    }
+
+    #[test]
+    fn email_rejects_malformed_but_accepts_real() {
+        for ok in ["a@b.co", "user.name@sub.example.com", "x@y.io"] {
+            assert!(is_plausible_email(ok), "{ok} should be accepted");
+        }
+        for bad in [
+            "user@",       // no domain
+            "@domain.com", // no local part
+            "a@b",         // no TLD
+            "a@b.c",       // 1-char TLD
+            "a@b@c.com",   // two @
+            "plain",       // no @
+            "a@b.123",     // numeric TLD
+        ] {
+            assert!(!is_plausible_email(bad), "{bad} should be rejected");
+        }
     }
 }

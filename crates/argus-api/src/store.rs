@@ -398,7 +398,13 @@ impl Store {
                 rows.sort_by(|a, b| b.1.total_cmp(&a.1));
                 Ok(rows
                     .into_iter()
-                    .filter_map(|(body, _)| serde_json::from_value(body).ok())
+                    .filter_map(|(body, _)| match serde_json::from_value(body) {
+                        Ok(asset) => Some(asset),
+                        Err(e) => {
+                            tracing::warn!(%tenant_id, error = %e, "skipping asset that failed to deserialize");
+                            None
+                        }
+                    })
                     .collect())
             }
         }
@@ -412,11 +418,21 @@ impl Store {
     ) -> Result<Option<ScoredAsset>, StoreError> {
         match self {
             Self::Postgres(pool) => Ok(db::load_one(pool, tenant_id, dedup_key).await?),
-            Self::Memory(m) => Ok(m
-                .lock()
-                .assets
-                .get(&(tenant_id, dedup_key.to_owned()))
-                .and_then(|(body, _)| serde_json::from_value(body.clone()).ok())),
+            Self::Memory(m) => {
+                // Clone the body out and release the lock before deserializing.
+                let body = m
+                    .lock()
+                    .assets
+                    .get(&(tenant_id, dedup_key.to_owned()))
+                    .map(|(body, _)| body.clone());
+                body.map_or(Ok(None), |body| match serde_json::from_value(body) {
+                    Ok(asset) => Ok(Some(asset)),
+                    Err(e) => {
+                        tracing::warn!(%tenant_id, dedup_key, error = %e, "asset failed to deserialize; treating as absent");
+                        Ok(None)
+                    }
+                })
+            }
         }
     }
 

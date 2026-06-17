@@ -324,7 +324,16 @@ pub async fn load_all(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ScoredAsset>
             .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|(body,)| serde_json::from_value(body).ok())
+        .filter_map(|(body,)| match serde_json::from_value(body) {
+            Ok(asset) => Some(asset),
+            Err(e) => {
+                // A row that no longer decodes (e.g. after a schema change) is
+                // skipped — but loudly, so the data-integrity drift is visible
+                // rather than a silently vanishing asset.
+                tracing::warn!(%tenant_id, error = %e, "skipping asset row that failed to deserialize");
+                None
+            }
+        })
         .collect())
 }
 
@@ -340,7 +349,18 @@ pub async fn load_one(
             .bind(dedup_key)
             .fetch_optional(pool)
             .await?;
-    Ok(row.and_then(|(body,)| serde_json::from_value(body).ok()))
+    match row {
+        None => Ok(None),
+        Some((body,)) => match serde_json::from_value(body) {
+            Ok(asset) => Ok(Some(asset)),
+            Err(e) => {
+                // Corrupted reads as absent (callers treat it as not-found),
+                // but log so re-minting an asset's identity is not silent.
+                tracing::warn!(%tenant_id, dedup_key, error = %e, "asset row failed to deserialize; treating as absent");
+                Ok(None)
+            }
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
