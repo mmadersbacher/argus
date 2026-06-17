@@ -67,3 +67,16 @@ vCenter 7.0.0,CVE-2021-21972,true
 vCenter 7.0.1,CVE-2021-21972,false
 GitLab 13.10.2,CVE-2021-22205,true
 GitLab 13.10.3,CVE-2021-22205,false
+# --- expanded-catalog entries (verify the newly added records correlate) ---
+Microsoft-IIS 8.0,CVE-2015-1635,true
+Microsoft-IIS 10.0,CVE-2015-1635,false
+OpenSSH 9.5,CVE-2023-48795,true
+OpenSSH 9.6,CVE-2023-48795,false
+Tomcat 9.0.50,CVE-2025-24813,true
+Tomcat 9.0.99,CVE-2025-24813,false
+Exim 4.69,CVE-2010-4344,true
+Exim 4.70,CVE-2010-4344,false
+CrushFTP 10.7.0,CVE-2024-4040,true
+CrushFTP 10.7.1,CVE-2024-4040,false
+ActiveMQ 5.13.0,CVE-2016-3088,true
+ActiveMQ 5.14.0,CVE-2016-3088,false

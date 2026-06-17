@@ -14,6 +14,9 @@ node_modules
 /web/out
 /web/dist
 
+# Eval real-data snapshots (large, drift daily, fetched via scripts/)
+/crates/argus-eval/data/real/
+
 # Misc
 *.log
 .DS_Store

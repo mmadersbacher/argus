@@ -173,25 +173,33 @@ pub fn run(path: Option<String>) {
     );
 
     // The FF2 effect: exploited (KEV) CVEs that a CVSS sort mis-ranks — low-CVSS
-    // ones, and worst, the NVD-gap CVEs with no CVSS (sorted to the bottom).
-    println!("\nexploited (KEV) CVEs that CVSS-only under-ranks:");
-    let mut shown = false;
-    for f in &findings {
-        if f.kev && f.cvss.is_none_or(|c| c < 7.0) {
-            shown = true;
-            let cvss = f
-                .cvss
-                .map_or_else(|| "none".to_owned(), |c| format!("{c:.1}"));
-            println!(
-                "  {:<16} cvss {:>4}  cvss-rank {:>3}  composite-rank {:>3}",
-                f.id,
-                cvss,
-                position(&findings, &by_cvss, &f.id),
-                position(&findings, &by_comp, &f.id),
-            );
-        }
+    // ones, and worst, the NVD-gap CVEs with no CVSS (sorted to the bottom). On a
+    // full dataset there can be many, so the list is capped.
+    let under: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.kev && f.cvss.is_none_or(|c| c < 7.0))
+        .collect();
+    let no_cvss_kev = under.iter().filter(|f| f.cvss.is_none()).count();
+    println!(
+        "\nexploited (KEV) CVEs CVSS-only under-ranks (cvss<7 or none): {} total, {no_cvss_kev} with no CVSS",
+        under.len(),
+    );
+    for f in under.iter().take(25) {
+        let cvss = f
+            .cvss
+            .map_or_else(|| "none".to_owned(), |c| format!("{c:.1}"));
+        println!(
+            "  {:<16} cvss {:>4}  cvss-rank {:>6}  composite-rank {:>6}",
+            f.id,
+            cvss,
+            position(&findings, &by_cvss, &f.id),
+            position(&findings, &by_comp, &f.id),
+        );
     }
-    if !shown {
+    if under.len() > 25 {
+        println!("  ... and {} more", under.len() - 25);
+    }
+    if under.is_empty() {
         println!("  (none in this dataset)");
     }
 
