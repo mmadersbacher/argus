@@ -1355,6 +1355,7 @@ mod tests {
                     .collect(),
                 open_ports: ports.to_vec(),
                 insecure_score: 0.0,
+                smb_v1: None,
             }
         }
 

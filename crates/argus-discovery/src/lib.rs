@@ -68,6 +68,13 @@ pub struct DiscoveredHost {
     pub open_ports: Vec<u16>,
     /// Placeholder insecure-service score (see [`fingerprint::insecure_service_score`]).
     pub insecure_score: f32,
+    /// Whether the host offers the legacy **SMBv1** dialect, when an SMB probe
+    /// ran: `Some(true)`/`Some(false)`; `None` if not probed (445 closed, or the
+    /// light connect scan, which doesn't probe). Lets correlation *refute*
+    /// SMBv1-only CVEs (EternalBlue) on evidence, instead of leaving them as
+    /// unverified potentials.
+    #[serde(default)]
+    pub smb_v1: Option<bool>,
 }
 
 /// Result of a scan run.
@@ -207,6 +214,8 @@ fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHos
         services,
         open_ports: ports,
         insecure_score,
+        // The light connect scan is payload-free — it does not probe SMB.
+        smb_v1: None,
     }
 }
 

@@ -171,6 +171,22 @@ pub fn correlate_services(services: &[Service]) -> Vec<Vulnerability> {
     out
 }
 
+/// Catalog CVEs whose exploitation strictly requires the legacy SMBv1 dialect.
+///
+/// When a host is *observed* not to offer SMBv1, these are refuted (an
+/// evidence-based negative), not merely left as unverified potentials.
+const SMBV1_REQUIRED: &[&str] = &["CVE-2017-0144"]; // EternalBlue
+
+/// Refute SMBv1-only CVEs on a host observed without SMBv1.
+///
+/// Removes them from `vulns` when `smbv1 == Some(false)`. `None` (not probed)
+/// or `Some(true)` leaves them unchanged — only a positive "no SMBv1" refutes.
+pub fn refute_smbv1_dependent(vulns: &mut Vec<Vulnerability>, smbv1: Option<bool>) {
+    if smbv1 == Some(false) {
+        vulns.retain(|v| !SMBV1_REQUIRED.contains(&v.cve_id.as_str()));
+    }
+}
+
 /// Build [`RiskInputs`] from correlated vulnerabilities plus asset context.
 ///
 /// Only **confirmed** findings drive the score — those whose version
@@ -476,5 +492,30 @@ mod tests {
         assert!((inputs.max_cvss - 0.0).abs() < f32::EPSILON);
         assert!(!inputs.kev_present);
         assert_eq!(inputs.critical_vulns, 0);
+    }
+
+    #[test]
+    fn smbv1_refutation_drops_eternalblue_only_when_observed_off() {
+        let has_eb = |v: &[Vulnerability]| v.iter().any(|x| x.cve_id == "CVE-2017-0144");
+
+        // SMBv1 observed OFF → EternalBlue refuted (removed entirely).
+        let mut off = correlate_product("smb");
+        refute_smbv1_dependent(&mut off, Some(false));
+        assert!(!has_eb(&off), "SMBv1 off must refute EternalBlue");
+        // SMBGhost needs SMBv3, not SMBv1 — absent SMBv1 must not refute it.
+        assert!(off.iter().any(|v| v.cve_id == "CVE-2020-0796"));
+
+        // SMBv1 ON → kept.
+        let mut on = correlate_product("smb");
+        refute_smbv1_dependent(&mut on, Some(true));
+        assert!(has_eb(&on), "SMBv1 on must keep EternalBlue");
+
+        // Not probed (None) → kept as a potential, never refuted on no evidence.
+        let mut unknown = correlate_product("smb");
+        refute_smbv1_dependent(&mut unknown, None);
+        assert!(
+            has_eb(&unknown),
+            "unprobed must keep EternalBlue as potential"
+        );
     }
 }

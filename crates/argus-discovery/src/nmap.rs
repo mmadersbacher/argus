@@ -67,7 +67,16 @@ pub async fn scan(
         spec,
         ports,
         run_timeout,
-        &["-sT", "-sV", "--version-light", "-T4"],
+        // `smb-protocols` negotiates SMB dialects on 445 (no auth) so we can
+        // *refute* SMBv1-only CVEs (EternalBlue) on hosts that don't offer it.
+        &[
+            "-sT",
+            "-sV",
+            "--version-light",
+            "--script",
+            "smb-protocols",
+            "-T4",
+        ],
     )
     .await
 }
@@ -89,7 +98,15 @@ pub async fn scan_os(
         spec,
         ports,
         run_timeout,
-        &["-sS", "-sV", "--version-light", "-O", "-T4"],
+        &[
+            "-sS",
+            "-sV",
+            "--version-light",
+            "-O",
+            "--script",
+            "smb-protocols",
+            "-T4",
+        ],
     )
     .await
 }
@@ -202,6 +219,14 @@ fn parse_host(host: Node<'_, '_>, now: OffsetDateTime) -> Option<DiscoveredHost>
     }
     fingerprint.confidence = fingerprint.confidence.max(60); // nmap gives real evidence
     let insecure_score = fingerprint::insecure_service_score(&open_ports);
+    // SMB dialects from the `smb-protocols` hostscript: SMBv1 is reported as the
+    // legacy "NT LM 0.12" dialect. `None` when the script did not run (445
+    // closed/filtered), `Some(false)` when only SMB2/3 dialects were offered.
+    let smb_v1 = host
+        .descendants()
+        .find(|n| n.has_tag_name("script") && n.attribute("id") == Some("smb-protocols"))
+        .and_then(|s| s.attribute("output"))
+        .map(|out| out.contains("NT LM 0.12"));
 
     let asset = Asset {
         id: AssetId::new(),
@@ -227,6 +252,7 @@ fn parse_host(host: Node<'_, '_>, now: OffsetDateTime) -> Option<DiscoveredHost>
         services,
         open_ports,
         insecure_score,
+        smb_v1,
     })
 }
 

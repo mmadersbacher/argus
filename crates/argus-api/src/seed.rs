@@ -118,8 +118,15 @@ fn score(
 /// Map a discovered host into a scored asset (real CVE-backed risk).
 #[must_use]
 pub fn scored_from_discovered(host: DiscoveredHost) -> ScoredAsset {
-    let (vulnerabilities, risk) =
-        score(&host.services, host.asset.exposure, host.asset.criticality);
+    let mut vulnerabilities = argus_vuln::correlate_services(&host.services);
+    // Evidence-based refutation: a host observed without SMBv1 cannot be hit by
+    // SMBv1-only CVEs (EternalBlue), so drop them rather than leave a potential.
+    argus_vuln::refute_smbv1_dependent(&mut vulnerabilities, host.smb_v1);
+    let risk = RiskScore::compute(&argus_vuln::risk_inputs(
+        &vulnerabilities,
+        host.asset.exposure,
+        host.asset.criticality,
+    ));
     ScoredAsset {
         asset: host.asset,
         services: host.services,
@@ -443,6 +450,7 @@ mod tests {
             }],
             open_ports: vec![port],
             insecure_score: 0.0,
+            smb_v1: None,
         }
     }
 
