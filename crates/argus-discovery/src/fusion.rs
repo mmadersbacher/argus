@@ -181,7 +181,8 @@ fn device_from_identity(hay: &str) -> Option<(&'static str, AssetType)> {
             || has("shelly")
             || has("sonoff")
             || has("tuya")
-            || has("coap") =>
+            || has("coap")
+            || has("mqtt") =>
         {
             ("iot-device", AssetType::Iot)
         }

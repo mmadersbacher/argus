@@ -18,6 +18,7 @@ pub mod ipp;
 pub mod masscan;
 pub mod mdns;
 pub mod miio;
+pub mod mqtt;
 pub mod netbios;
 pub mod nmap;
 pub mod oui;
@@ -235,6 +236,7 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     ipp_enrich(hosts).await;
     pjl_enrich(hosts).await;
     rtsp_enrich(hosts).await;
+    mqtt_enrich(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
 }
@@ -755,6 +757,47 @@ fn apply_rtsp(host: &mut DiscoveredHost, info: &rtsp::RtspInfo) {
         let _ = write!(facet, " Public={public}");
     }
     enrich_service_banner(host, 554, facet, "rtsp:");
+}
+
+/// MQTT ports we confirm a broker on.
+const MQTT_PORTS: &[u16] = &[1883, 8883];
+
+/// Confirm an MQTT broker on each host's open MQTT ports via a `CONNECT`/`CONNACK`.
+async fn mqtt_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr, u16)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        for &p in &h.open_ports {
+            if MQTT_PORTS.contains(&p) {
+                targets.push((i, ip, p));
+            }
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip, port) in targets {
+        set.spawn(async move {
+            (
+                idx,
+                port,
+                mqtt::query(ip, port, Duration::from_secs(4)).await,
+            )
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, port, Some(info))) = joined else {
+            continue;
+        };
+        let auth = if info.anonymous_ok {
+            "anonymous-ok"
+        } else {
+            "auth-required"
+        };
+        let facet = format!("mqtt: broker rc={} {auth}", info.return_code);
+        enrich_service_banner(&mut hosts[idx], port, facet, "mqtt:");
+    }
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {
