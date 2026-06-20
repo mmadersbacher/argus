@@ -372,17 +372,31 @@ mod tests {
     }
 
     #[test]
-    fn every_seed_asset_has_at_least_one_vuln_and_nonzero_risk() {
-        // Guards against a seed silently scoring 0.0 (e.g. an unfingerprintable
-        // "https"-only service that correlates nothing).
-        for a in seed_assets() {
+    fn every_seed_asset_correlates_and_scores_only_on_confirmed_findings() {
+        // Every seed asset correlates at least one CVE, and its risk is nonzero
+        // *exactly* when it carries a confirmed (version-checked) finding —
+        // version-blind potentials are surfaced but never drive the score.
+        let assets = seed_assets();
+        for a in &assets {
             let label = a.asset.fingerprint.device_type.clone().unwrap_or_default();
             assert!(
                 !a.vulnerabilities.is_empty(),
                 "seed asset '{label}' correlated zero vulnerabilities"
             );
-            assert!(a.risk.value > 0.0, "seed asset '{label}' scored risk 0.0");
+            let has_confirmed = a.vulnerabilities.iter().any(Vulnerability::is_confirmed);
+            assert_eq!(
+                a.risk.value > 0.0,
+                has_confirmed,
+                "seed asset '{label}': risk>0 ({}) must match having a confirmed finding ({has_confirmed})",
+                a.risk.value
+            );
         }
+        // The demo must still showcase real (confirmed) risk, not only potentials.
+        let confirmed_assets = assets.iter().filter(|a| a.risk.value > 0.0).count();
+        assert!(
+            confirmed_assets >= 4,
+            "expected several seed assets with confirmed risk, got {confirmed_assets}"
+        );
     }
 
     #[test]
@@ -408,9 +422,8 @@ mod tests {
         assert!(json.contains('T'));
     }
 
-    #[test]
-    fn discovered_host_with_vulnerable_service_scores() {
-        let host = DiscoveredHost {
+    fn host_with(product: &str, port: u16) -> DiscoveredHost {
+        DiscoveredHost {
             asset: Asset {
                 id: AssetId::new(),
                 asset_type: AssetType::Network,
@@ -422,21 +435,50 @@ mod tests {
                 last_seen: OffsetDateTime::UNIX_EPOCH,
             },
             services: vec![Service {
-                port: 3389,
+                port,
                 protocol: Protocol::Tcp,
-                product: Some("rdp".to_owned()),
+                product: Some(product.to_owned()),
                 banner: None,
                 cpe: None,
             }],
-            open_ports: vec![3389],
+            open_ports: vec![port],
             insecure_score: 0.0,
-        };
-        let scored = scored_from_discovered(host);
-        assert!(scored
+        }
+    }
+
+    #[test]
+    fn discovered_host_with_a_confirmed_vulnerable_service_scores() {
+        // A version-matched (confirmed) service drives the score: OpenSSH 8.9p1
+        // is inside the regreSSHion range, so CVE-2024-6387 is confirmed.
+        let scored = scored_from_discovered(host_with("OpenSSH 8.9p1", 22));
+        let v = scored
             .vulnerabilities
             .iter()
-            .any(|v| v.cve_id == "CVE-2019-0708"));
+            .find(|v| v.cve_id == "CVE-2024-6387")
+            .expect("regreSSHion correlates");
+        assert!(v.is_confirmed());
         assert!(scored.risk.value > 0.0);
+    }
+
+    #[test]
+    fn discovered_host_with_only_version_blind_findings_scores_zero() {
+        // An RDP host: BlueKeep is version-blind (potential) — correlated and
+        // surfaced, but unverified, so it does not drive the score.
+        let scored = scored_from_discovered(host_with("rdp", 3389));
+        let bluekeep = scored
+            .vulnerabilities
+            .iter()
+            .find(|v| v.cve_id == "CVE-2019-0708")
+            .expect("BlueKeep correlates");
+        assert!(
+            bluekeep.is_potential(),
+            "version-blind BlueKeep is a potential"
+        );
+        assert!(
+            (scored.risk.value - 0.0).abs() < f32::EPSILON,
+            "an all-potential host scores 0, got {}",
+            scored.risk.value
+        );
     }
 
     #[test]

@@ -172,28 +172,33 @@ pub fn correlate_services(services: &[Service]) -> Vec<Vulnerability> {
 }
 
 /// Build [`RiskInputs`] from correlated vulnerabilities plus asset context.
+///
+/// Only **confirmed** findings drive the score — those whose version
+/// applicability was actually verified ([`Vulnerability::is_confirmed`]).
+/// Version-blind / CPE-only matches are *potential*: the product is present
+/// but applicability is unverified, so they must not inflate the risk (the
+/// EternalBlue-on-a-patched-host problem). They are surfaced separately for
+/// human verification, not fed into the score.
 #[must_use]
 pub fn risk_inputs(
     vulns: &[Vulnerability],
     exposure: Exposure,
     criticality: Criticality,
 ) -> RiskInputs {
-    let max_cvss = vulns
-        .iter()
+    let confirmed = || vulns.iter().filter(|v| v.is_confirmed());
+    let max_cvss = confirmed()
         .filter_map(|v| v.cvss.as_ref().map(|c| c.base_score))
         .fold(0.0_f32, f32::max);
-    let max_epss = vulns
-        .iter()
+    let max_epss = confirmed()
         .filter_map(|v| v.epss.map(|e| e.score))
         .fold(0.0_f32, f32::max);
-    let kev_present = vulns.iter().any(|v| v.kev);
-    let critical_vulns = count_severity(vulns, Severity::Critical);
-    let high_vulns = count_severity(vulns, Severity::High);
-    // The score's confidence is that of the vulnerability driving it: highest
-    // CVSS, then KEV, then the more certain match. An empty set is a confident
-    // "nothing found".
-    let confidence = vulns
-        .iter()
+    let kev_present = confirmed().any(|v| v.kev);
+    let critical_vulns = count_severity(confirmed(), Severity::Critical);
+    let high_vulns = count_severity(confirmed(), Severity::High);
+    // The score's confidence is that of the confirmed finding driving it:
+    // highest CVSS, then KEV, then the more certain match. No confirmed
+    // findings is a confident "nothing verified".
+    let confidence = confirmed()
         .max_by(|a, b| {
             let sa = a.cvss.as_ref().map_or(0.0, |c| c.base_score);
             let sb = b.cvss.as_ref().map_or(0.0, |c| c.base_score);
@@ -215,10 +220,10 @@ pub fn risk_inputs(
     }
 }
 
-/// Count an asset's vulnerabilities at exactly `severity`, saturating at
-/// `u32::MAX` (a count no real host approaches).
-fn count_severity(vulns: &[Vulnerability], severity: Severity) -> u32 {
-    u32::try_from(vulns.iter().filter(|v| v.severity == severity).count()).unwrap_or(u32::MAX)
+/// Count vulnerabilities at exactly `severity`, saturating at `u32::MAX`
+/// (a count no real host approaches).
+fn count_severity<'a>(vulns: impl Iterator<Item = &'a Vulnerability>, severity: Severity) -> u32 {
+    u32::try_from(vulns.filter(|v| v.severity == severity).count()).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -409,12 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn risk_confidence_follows_the_score_driver() {
-        // The highest-CVSS vuln drives the score, so its match confidence is
-        // the score's confidence — even when a lower-CVSS vuln is more certain.
+    fn version_blind_findings_do_not_drive_the_score() {
+        // The EternalBlue-on-a-patched-host fix: a high-CVSS but version-blind
+        // (potential) finding must NOT inflate the score — only the confirmed,
+        // version-checked finding counts.
         let vulns = vec![
             Vulnerability {
-                cve_id: "low-but-certain".into(),
+                cve_id: "confirmed-medium".into(),
                 cvss: Some(Cvss {
                     base_score: 4.0,
                     vector: None,
@@ -425,18 +431,50 @@ mod tests {
                 match_confidence: Confidence::Confirmed,
             },
             Vulnerability {
-                cve_id: "high-but-blind".into(),
+                cve_id: "potential-critical".into(),
                 cvss: Some(Cvss {
                     base_score: 9.8,
                     vector: None,
                 }),
-                epss: None,
-                kev: false,
+                epss: Some(Epss {
+                    score: 0.9,
+                    percentile: None,
+                }),
+                kev: true,
                 severity: Severity::Critical,
                 match_confidence: Confidence::Low,
             },
         ];
         let inputs = risk_inputs(&vulns, Exposure::Internal, Criticality::Medium);
-        assert_eq!(inputs.confidence, Confidence::Low);
+        assert!(
+            (inputs.max_cvss - 4.0).abs() < f32::EPSILON,
+            "a version-blind 9.8 must not drive max_cvss"
+        );
+        assert!(
+            !inputs.kev_present,
+            "a version-blind KEV must not set kev_present"
+        );
+        assert_eq!(
+            inputs.critical_vulns, 0,
+            "the version-blind Critical must not be counted"
+        );
+        assert_eq!(inputs.confidence, Confidence::Confirmed);
+    }
+
+    #[test]
+    fn an_all_potential_asset_yields_no_score_driving_findings() {
+        // `smb` → EternalBlue + SMBGhost are version-blind (potential). An SMB
+        // host with no confirmed findings produces zero score inputs (Info),
+        // not a KEV-inflated Medium.
+        let smb = correlate_product("smb");
+        assert!(!smb.is_empty());
+        assert!(
+            smb.iter().all(Vulnerability::is_potential),
+            "all smb catalog hits are version-blind potentials"
+        );
+        let inputs = risk_inputs(&smb, Exposure::Internal, Criticality::Medium);
+        assert!((inputs.max_cvss - 0.0).abs() < f32::EPSILON);
+        assert!(!inputs.kev_present);
+        assert_eq!(inputs.critical_vulns, 0);
     }
 }

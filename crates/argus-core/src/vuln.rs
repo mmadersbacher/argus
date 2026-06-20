@@ -49,8 +49,14 @@ impl Severity {
 /// - `High` — catalog match with the observed version inside an explicit
 ///   version range,
 /// - `Medium` — precise CPE identity but no version was checked,
-/// - `Low` — version-blind (a product-token or all-versions match, e.g. a
-///   protocol-level CVE that applies regardless of version).
+/// - `Low` — version-blind (a product-token or all-versions catalog match).
+///
+/// This also separates a **confirmed** finding from a merely **potential**
+/// one (see [`Vulnerability::is_confirmed`]): `High`/`Confirmed` verified that
+/// the observed version actually falls in the affected range, whereas
+/// `Low`/`Medium` only establish that the product is *present* — applicability
+/// to this version is unverified. The first is a real vulnerability; the second
+/// is a lead to verify, and must not be presented or scored as if confirmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Confidence {
@@ -104,6 +110,27 @@ pub struct Vulnerability {
     /// before match-confidence tracking existed.
     #[serde(default)]
     pub match_confidence: Confidence,
+}
+
+impl Vulnerability {
+    /// Whether the match **verified applicability**: the observed version fell
+    /// inside the CVE's affected range (catalog `High`) or matched NVD's
+    /// published constraints (`Confirmed`). A *confirmed* finding is a real
+    /// vulnerability — it is what drives the risk score.
+    #[must_use]
+    pub fn is_confirmed(&self) -> bool {
+        self.match_confidence >= Confidence::High
+    }
+
+    /// The complement of [`Self::is_confirmed`]: the product/service is present
+    /// and associated with this CVE, but applicability was **not** verified
+    /// (version unknown — version-blind `Low`, or CPE-only `Medium`). A
+    /// *potential* finding is a lead to verify, not a confirmed vulnerability;
+    /// it is surfaced separately and does **not** drive the risk score.
+    #[must_use]
+    pub fn is_potential(&self) -> bool {
+        !self.is_confirmed()
+    }
 }
 
 #[cfg(test)]
