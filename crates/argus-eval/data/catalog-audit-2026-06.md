@@ -11,6 +11,25 @@ inclusive span, but NVD encodes most multi-branch products as SEVERAL disjoint
 per-branch ranges with patched gaps. A patched intermediate release falls inside
 argus's span and is reported at High confidence. Fix = a multi-range variant.
 
+## Status — resolved for version-checked entries
+
+Added `VersionRange::Branches(&[(start, fixed)])` (disjoint half-open intervals)
+and converted the 8 version-checked `too_broad` entries (Samba, MySQL, MariaDB,
+libssh, nginx, MongoDB, WordPress, Drupal) plus the 7 `too_narrow` entries
+(OpenSSH ×2, Apache, CrushFTP ×3, Memcached). FF1 result: High-tier precision
+**0.88 → 1.00** (13 High-confidence false positives → 0), recall **0.95 → 1.00**
+(7 missed → 0).
+
+The remaining `too_broad` rows are all `Any` (version-blind) entries —
+appliances/cameras/OT (Hikvision, Dahua, Axis, SIMATIC, vCenter, Exchange) where
+NVD has no usable remote version signal, and software (Log4j, Spring, Struts,
+ActiveMQ, GitLab, PHP, WebLogic, redis, elasticsearch) kept as presence-only
+flags so they still correlate on a bare connect-scan. These stay at **Low**
+confidence and never drive the risk score, so their patched-version hits are
+surfaced-only potentials, not scored false positives. Converting them to
+version-checked branches is deferred: it would lose the bare-detection flag and
+needs an observed version to be worthwhile.
+
 
 ## too_broad — High-confidence false positives (28)
 

@@ -28,6 +28,12 @@ pub enum VersionRange {
     AtMost(&'static str),
     /// Within `[low, high]` inclusive.
     Range(&'static str, &'static str),
+    /// Several disjoint affected branches, each a half-open `[start, fixed)`
+    /// interval (NVD's `versionStartIncluding`..`versionEndExcluding`). A
+    /// version is affected if it falls in ANY interval. This is the honest
+    /// shape for multi-branch CVEs, where a single continuous [`Range`] would
+    /// also flag the patched per-branch releases that sit between the branches.
+    Branches(&'static [(&'static str, &'static str)]),
     /// Exactly this version.
     Exact(&'static str),
 }
@@ -44,6 +50,10 @@ impl VersionRange {
                 version::cmp(version, lo) != Ordering::Less
                     && version::cmp(version, hi) != Ordering::Greater
             }
+            Self::Branches(intervals) => intervals.iter().any(|(start, fixed)| {
+                version::cmp(version, start) != Ordering::Less
+                    && version::cmp(version, fixed) == Ordering::Less
+            }),
             Self::Exact(x) => version::cmp(version, x) == Ordering::Equal,
         }
     }
@@ -516,6 +526,39 @@ mod tests {
         assert!(
             has_eb(&unknown),
             "unprobed must keep EternalBlue as potential"
+        );
+    }
+
+    #[test]
+    fn branches_match_each_interval_and_suppress_the_patched_gaps() {
+        // A multi-branch CVE: affected inside any [start, fixed) interval, but
+        // the patched per-branch releases between intervals are NOT affected.
+        let mariadb = VersionRange::Branches(&[("10.3.0", "10.3.28"), ("10.4.0", "10.4.18")]);
+        assert!(mariadb.contains("10.3.27"), "last affected of a branch");
+        assert!(!mariadb.contains("10.3.28"), "first fixed of a branch");
+        assert!(!mariadb.contains("10.4.30"), "patched, above the 10.4 fix");
+        assert!(!mariadb.contains("10.5.1"), "branch not listed at all");
+        assert!(mariadb.contains("10.4.0"), "branch base is included");
+    }
+
+    #[test]
+    fn multi_branch_catalog_fix_removes_the_high_confidence_false_positive() {
+        let reports = |s: &str| {
+            correlate_product(s)
+                .into_iter()
+                .find(|v| v.cve_id == "CVE-2021-27928")
+        };
+        // The defect that drove the fix: a patched intermediate release used to
+        // fall inside the single continuous range and report at High. Now it is
+        // suppressed, while a genuinely affected version still reports High.
+        assert!(
+            reports("MariaDB 10.3.28").is_none(),
+            "patched -> no High FP"
+        );
+        assert_eq!(
+            reports("MariaDB 10.3.27").map(|v| v.match_confidence),
+            Some(Confidence::High),
+            "genuinely affected -> still reported, High",
         );
     }
 }

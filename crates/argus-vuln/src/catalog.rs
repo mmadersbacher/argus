@@ -10,6 +10,12 @@
 //! - **protocol-level** entries (`smb`, `rdp`, â€¦) use [`VersionRange::Any`] so
 //!   they correlate even on a bare connect-scan, where only the service name is
 //!   known.
+//!
+//! Version-checked ranges mirror NVD: a CVE that affects several disjoint
+//! product branches with patched gaps uses [`VersionRange::Branches`] (one
+//! `[start, fixed)` interval per branch) rather than one continuous
+//! [`VersionRange::Range`], so a patched per-branch release between the branches
+//! is not flagged. The FF1 harness (`argus-eval`) measures this precision.
 
 use argus_core::Severity;
 
@@ -21,7 +27,9 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2024-6387",
         product: "OpenSSH",
-        affected: VersionRange::Range("8.5", "9.7"),
+        // NVD: < 4.4p1, AND 8.5p1..=9.7p1 (regression reintroduced in 8.5p1;
+        // 4.4-8.4 not affected). Fix 9.8p1.
+        affected: VersionRange::Branches(&[("0", "4.4p1"), ("8.5", "9.8")]),
         cvss: 8.1,
         epss: 0.62,
         kev: true,
@@ -31,7 +39,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2018-15473",
         product: "OpenSSH",
-        affected: VersionRange::LessThan("7.7"),
+        // NVD: through 7.7 inclusive (versionEndIncluding 7.7), fix 7.8.
+        affected: VersionRange::LessThan("7.8"),
         cvss: 5.3,
         epss: 0.78,
         kev: false,
@@ -52,7 +61,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2021-42013",
         product: "Apache httpd",
-        affected: VersionRange::Exact("2.4.50"),
+        // NVD: 2.4.49 AND 2.4.50 (incomplete fix for 41773), fix 2.4.51.
+        affected: VersionRange::Range("2.4.49", "2.4.50"),
         cvss: 9.8,
         epss: 0.975,
         kev: true,
@@ -124,7 +134,12 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2017-7494",
         product: "Samba",
-        affected: VersionRange::Range("3.5.0", "4.6.4"),
+        // NVD per-branch: 3.5.0..<4.4.14, 4.5.0..<4.5.10, 4.6.0..<4.6.4.
+        affected: VersionRange::Branches(&[
+            ("3.5.0", "4.4.14"),
+            ("4.5.0", "4.5.10"),
+            ("4.6.0", "4.6.4"),
+        ]),
         cvss: 9.8,
         epss: 0.92,
         kev: true,
@@ -157,7 +172,12 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2012-2122",
         product: "MySQL",
-        affected: VersionRange::Range("5.1.0", "5.6.5"),
+        // NVD per-branch: 5.1.x<5.1.63, 5.5.x<5.5.24, 5.6.x<5.6.6.
+        affected: VersionRange::Branches(&[
+            ("5.1.0", "5.1.63"),
+            ("5.5.0", "5.5.24"),
+            ("5.6.0", "5.6.6"),
+        ]),
         cvss: 5.5,
         epss: 0.60,
         kev: false,
@@ -446,7 +466,9 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2022-41741",
         product: "nginx",
-        affected: VersionRange::Range("1.1.3", "1.23.1"),
+        // NVD two ranges: 1.1.3..<1.22.1 AND 1.23.0..<1.23.2 (1.22.1 stable
+        // branch got the backported fix, so 1.22.1-1.22.x are not affected).
+        affected: VersionRange::Branches(&[("1.1.3", "1.22.1"), ("1.23.0", "1.23.2")]),
         cvss: 7.8,
         epss: 0.0076,
         kev: false,
@@ -486,7 +508,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2018-10933",
         product: "libssh",
-        affected: VersionRange::Range("0.6.0", "0.8.3"),
+        // NVD: 0.6.0..<0.7.6 AND 0.8.0..<0.8.4 (0.7.6+ patched line excluded).
+        affected: VersionRange::Branches(&[("0.6.0", "0.7.6"), ("0.8.0", "0.8.4")]),
         cvss: 9.1,
         epss: 0.9179,
         kev: false,
@@ -566,7 +589,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2024-4040",
         product: "CrushFTP",
-        affected: VersionRange::LessThan("10.7.1"),
+        // NVD two branches: 10.0.0..<10.7.1 AND 11.0.0..<11.1.0.
+        affected: VersionRange::Branches(&[("10.0.0", "10.7.1"), ("11.0.0", "11.1.0")]),
         cvss: 10.0,
         epss: 0.9954,
         kev: true,
@@ -576,7 +600,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2025-31161",
         product: "CrushFTP",
-        affected: VersionRange::LessThan("10.8.4"),
+        // NVD two branches: 10.0.0..<10.8.4 AND 11.0.0..<11.3.1.
+        affected: VersionRange::Branches(&[("10.0.0", "10.8.4"), ("11.0.0", "11.3.1")]),
         cvss: 9.8,
         epss: 0.9996,
         kev: true,
@@ -586,7 +611,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2025-54309",
         product: "CrushFTP",
-        affected: VersionRange::LessThan("10.8.5"),
+        // NVD two branches: 10.0.0..<10.8.5 AND 11.0.0..<11.3.4_23.
+        affected: VersionRange::Branches(&[("10.0.0", "10.8.5"), ("11.0.0", "11.3.4_23")]),
         cvss: 9.8,
         epss: 0.9166,
         kev: true,
@@ -636,7 +662,16 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2025-14847",
         product: "MongoDB",
-        affected: VersionRange::LessThan("8.2.3"),
+        // NVD per-branch (MongoBleed): 8.2<8.2.3, 8.0<8.0.17, 7.0<7.0.28,
+        // 6.0<6.0.27, 5.0<5.0.32, 4.4<4.4.30 (EOL 4.2/4.0/3.6 have no fix).
+        affected: VersionRange::Branches(&[
+            ("8.2.0", "8.2.3"),
+            ("8.0.0", "8.0.17"),
+            ("7.0.0", "7.0.28"),
+            ("6.0.0", "6.0.27"),
+            ("5.0.0", "5.0.32"),
+            ("4.4.0", "4.4.30"),
+        ]),
         cvss: 7.5,
         epss: 0.8301,
         kev: true,
@@ -656,7 +691,13 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2021-27928",
         product: "MariaDB",
-        affected: VersionRange::Range("10.2", "10.5.9"),
+        // NVD per-branch: 10.2<10.2.37, 10.3<10.3.28, 10.4<10.4.18, 10.5<10.5.9.
+        affected: VersionRange::Branches(&[
+            ("10.2.0", "10.2.37"),
+            ("10.3.0", "10.3.28"),
+            ("10.4.0", "10.4.18"),
+            ("10.5.0", "10.5.9"),
+        ]),
         cvss: 7.2,
         epss: 0.3844,
         kev: false,
@@ -666,7 +707,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2016-8706",
         product: "Memcached",
-        affected: VersionRange::AtMost("1.4.31"),
+        // Last affected 1.4.32; fix landed in 1.4.33 (Talos TALOS-2016-0221).
+        affected: VersionRange::LessThan("1.4.33"),
         cvss: 8.1,
         epss: 0.457,
         kev: false,
@@ -746,7 +788,13 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2022-21661",
         product: "WordPress",
-        affected: VersionRange::LessThan("5.8.3"),
+        // Per-branch backports; verified subset (older branches under-covered
+        // rather than guessed): 4.7<4.7.22, 5.7<5.7.5, 5.8<5.8.3.
+        affected: VersionRange::Branches(&[
+            ("4.7.0", "4.7.22"),
+            ("5.7.0", "5.7.5"),
+            ("5.8.0", "5.8.3"),
+        ]),
         cvss: 7.5,
         epss: 0.978,
         kev: false,
@@ -766,7 +814,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2019-6340",
         product: "Drupal",
-        affected: VersionRange::Range("8.5.0", "8.6.9"),
+        // NVD: 8.5.0..<8.5.11 AND 8.6.0..<8.6.10 (SA-CORE-2019-003).
+        affected: VersionRange::Branches(&[("8.5.0", "8.5.11"), ("8.6.0", "8.6.10")]),
         cvss: 8.1,
         epss: 0.9192,
         kev: true,
