@@ -23,11 +23,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use argus_core::{Confidence, Cvss, Epss, Service, Vulnerability};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OnceCell, RwLock};
+use tokio::time::Instant as TokioInstant;
 
 use crate::nvd;
 use crate::version;
@@ -285,6 +286,60 @@ struct DiskCache {
     products: HashMap<String, Stamp<Vec<ProductCve>>>,
 }
 
+/// A product's in-flight fetch, shared by every caller that wants the same
+/// `vendor:product` while one network fetch is running. The [`OnceCell`] runs
+/// the fetch exactly once; concurrent callers for the same key await that
+/// single result instead of issuing duplicate NVD requests.
+type Flight = Arc<OnceCell<Option<Arc<Vec<ProductCve>>>>>;
+
+/// Paces NVD requests to the API rate limit *without* serializing the fetches
+/// behind it. A reservation cursor records the earliest instant the next
+/// request may start; [`acquire`](NvdRateGate::acquire) advances it under a
+/// brief `std` lock held only for the arithmetic — never across the sleep or
+/// the HTTP request. Callers therefore serialize their slot *reservations*
+/// (microseconds) while their multi-page fetches run concurrently and the
+/// aggregate request rate still stays within NVD's limit. This replaces the
+/// old single global mutex that was held for a product's whole paginated
+/// fetch, so one large product (browsers are ~4000 CVEs across several pages)
+/// no longer stalls every other product's — or every other tenant's —
+/// enrichment.
+struct NvdRateGate {
+    /// Earliest instant the next NVD request may begin; `None` until the
+    /// first request reserves a slot.
+    next: std::sync::Mutex<Option<TokioInstant>>,
+    /// Minimum spacing between requests at the configured rate limit.
+    spacing: Duration,
+}
+
+impl NvdRateGate {
+    fn new(spacing: Duration) -> Self {
+        Self {
+            next: std::sync::Mutex::new(None),
+            spacing,
+        }
+    }
+
+    /// Reserve the next request slot and wait until it is due. The lock is
+    /// held only to advance the cursor; the wait happens after it is released,
+    /// so a reservation never blocks a concurrent fetch.
+    async fn acquire(&self) {
+        let wait = {
+            let mut next = self
+                .next
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = TokioInstant::now();
+            let slot = (*next).filter(|n| *n > now).unwrap_or(now);
+            *next = Some(slot + self.spacing);
+            drop(next);
+            slot.saturating_duration_since(now)
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+}
+
 /// Shared cache state behind [`IntelCache`].
 struct Inner {
     /// NVD API key (`NVD_API_KEY`), lifting the rate limit when present.
@@ -298,9 +353,12 @@ struct Inner {
     epss: RwLock<HashMap<String, Stamp<Option<nvd::EpssScore>>>>,
     /// Per-`vendor:product` NVD CVE sets.
     products: RwLock<HashMap<String, Stamp<Arc<Vec<ProductCve>>>>>,
-    /// Paces NVD requests to the rate limit and doubles as the single-flight
-    /// guard for product fetches.
-    nvd_gate: Mutex<Option<Instant>>,
+    /// Paces NVD requests to the API rate limit without serializing fetches.
+    nvd_rate: NvdRateGate,
+    /// Per-`vendor:product` single-flight registry: concurrent fetches of the
+    /// same key share one network request; different keys never block each
+    /// other. Held only for brief map operations (no `await` inside).
+    inflight: std::sync::Mutex<HashMap<String, Flight>>,
     /// Snapshot file for persistence across restarts; `None` disables it.
     persist: Option<PathBuf>,
     /// Set on every cache write, cleared by [`IntelCache::flush`] — skips
@@ -366,6 +424,11 @@ impl IntelCache {
         let api_key = nvd_api_key
             .map(|k| k.trim().to_owned())
             .filter(|k| !k.is_empty());
+        let spacing = if api_key.is_some() {
+            NVD_SPACING_KEYED
+        } else {
+            NVD_SPACING
+        };
         // Restore only entries still fresh by their TTL — an old snapshot
         // degrades to a cold cache, never to stale intelligence.
         let mut kev = None;
@@ -409,7 +472,8 @@ impl IntelCache {
                 kev_refresh: Mutex::new(()),
                 epss: RwLock::new(epss),
                 products: RwLock::new(products),
-                nvd_gate: Mutex::new(None),
+                nvd_rate: NvdRateGate::new(spacing),
+                inflight: std::sync::Mutex::new(HashMap::new()),
                 persist,
                 dirty: AtomicBool::new(false),
                 flush_lock: Mutex::new(()),
@@ -623,52 +687,75 @@ impl IntelCache {
         if let Some(hit) = self.cached_product(&key).await {
             return Some(hit);
         }
-        // The gate paces NVD requests to the rate limit and doubles as a
-        // single flight: a task that waited here re-checks the cache before
-        // spending a request.
-        let mut gate = self.inner.nvd_gate.lock().await;
-        if let Some(hit) = self.cached_product(&key).await {
-            return Some(hit);
-        }
-        if let Some(last) = *gate {
-            let wait = self.spacing().saturating_sub(last.elapsed());
-            if !wait.is_zero() {
-                tokio::time::sleep(wait).await;
+        // Per-product single flight: the first caller for this key creates the
+        // flight cell; concurrent callers for the *same* key share it and await
+        // that one fetch. Different keys get different cells and fetch
+        // concurrently, each request paced by the shared rate gate rather than
+        // blocked behind another product's whole paginated fetch.
+        let cell = {
+            let mut inflight = self
+                .inner
+                .inflight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Arc::clone(
+                inflight
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(OnceCell::new())),
+            )
+        };
+        let result = cell
+            .get_or_init(|| self.fetch_and_cache_product(vendor, product, &key))
+            .await
+            .clone();
+        // Retire this flight so a later refresh (after the TTL) starts fresh —
+        // but only if the registry still holds *our* cell, never a newer one.
+        {
+            let mut inflight = self
+                .inner
+                .inflight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if inflight.get(&key).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
+                inflight.remove(&key);
             }
         }
-        let fetched = self.fetch_product(vendor, product).await;
-        // A failed request still counts toward the rate limit.
-        *gate = Some(Instant::now());
-        drop(gate);
+        result
+    }
 
-        let cves = Arc::new(fetched?);
+    /// Fetch a product's CVE set through the rate gate and cache it on success.
+    /// `None` on fetch failure (never cached as the product's truth — the next
+    /// scan retries). Runs once per flight, driven by the caller's [`OnceCell`].
+    async fn fetch_and_cache_product(
+        &self,
+        vendor: &str,
+        product: &str,
+        key: &str,
+    ) -> Option<Arc<Vec<ProductCve>>> {
+        let cves = Arc::new(self.fetch_product(vendor, product).await?);
         let mut map = self.inner.products.write().await;
-        map.insert(key, Stamp::new(Arc::clone(&cves)));
+        map.insert(key.to_owned(), Stamp::new(Arc::clone(&cves)));
         shrink_to(&mut map, MAX_PRODUCTS);
         drop(map);
         self.inner.dirty.store(true, AtomicOrdering::Relaxed);
         Some(cves)
     }
 
-    /// Minimum spacing between NVD requests at the current rate limit.
-    fn spacing(&self) -> Duration {
-        if self.inner.api_key.is_some() {
-            NVD_SPACING_KEYED
-        } else {
-            NVD_SPACING
-        }
-    }
-
     /// Fetch every NVD CVE whose configurations match `vendor:product`,
-    /// following pagination (2000 per page, paced to the rate limit — the
-    /// caller holds the NVD gate for the whole call) up to
-    /// [`MAX_NVD_RESULTS`]; hitting that cap is logged. `None` if any page
-    /// fails: a partial CVE set must not be cached as the product's truth.
+    /// following pagination (2000 per page); every page reserves a slot from
+    /// the shared [`NvdRateGate`] so requests pace to the rate limit while
+    /// other products fetch concurrently. Stops at [`MAX_NVD_RESULTS`] (logged
+    /// so truncation is never silent). `None` if any page fails: a partial CVE
+    /// set must not be cached as the product's truth.
     async fn fetch_product(&self, vendor: &str, product: &str) -> Option<Vec<ProductCve>> {
         let match_string = format!("cpe:2.3:a:{vendor}:{product}");
         let mut cves: Vec<ProductCve> = Vec::new();
         let mut start_index: u64 = 0;
         loop {
+            // Reserve a request slot from the shared rate gate before every
+            // page — this is where NVD pacing happens now, off the lock so
+            // concurrent products interleave instead of serializing.
+            self.inner.nvd_rate.acquire().await;
             let index = start_index.to_string();
             let mut req = nvd::client().get(nvd::NVD_API).query(&[
                 ("virtualMatchString", match_string.as_str()),
@@ -711,7 +798,6 @@ impl IntelCache {
                 );
                 break;
             }
-            tokio::time::sleep(self.spacing()).await;
         }
         tracing::debug!(
             vendor,
@@ -1103,5 +1189,54 @@ mod tests {
         let cache = IntelCache::with_persistence(None, &snapshot.0);
         cache.flush().await;
         assert!(!snapshot.0.exists());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_gate_paces_requests_to_the_spacing() {
+        let spacing = Duration::from_millis(500);
+        let gate = NvdRateGate::new(spacing);
+        let start = TokioInstant::now();
+        // The first reservation is immediate; each later one is exactly one
+        // spacing interval after the previous, so the aggregate request rate
+        // never exceeds the limit regardless of how callers interleave.
+        gate.acquire().await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        gate.acquire().await;
+        assert_eq!(start.elapsed(), spacing);
+        gate.acquire().await;
+        assert_eq!(start.elapsed(), spacing * 2);
+    }
+
+    #[tokio::test]
+    async fn flight_cell_runs_the_fetch_once_for_concurrent_callers() {
+        use std::sync::atomic::AtomicUsize;
+        // Models the single-flight guarantee product_cves relies on: many
+        // concurrent callers sharing one flight cell trigger exactly one
+        // fetch, and all observe the same result.
+        let cell: Flight = Arc::new(OnceCell::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cell = Arc::clone(&cell);
+            let calls = Arc::clone(&calls);
+            handles.push(tokio::spawn(async move {
+                cell.get_or_init(|| async {
+                    calls.fetch_add(1, AtomicOrdering::Relaxed);
+                    tokio::task::yield_now().await;
+                    Some(Arc::new(vec![product_cve("CVE-2024-1")]))
+                })
+                .await
+                .clone()
+            }));
+        }
+        for handle in handles {
+            let got = handle.await.unwrap().expect("flight result");
+            assert_eq!(got[0].vuln.cve_id, "CVE-2024-1");
+        }
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            1,
+            "the fetch must run exactly once for the shared flight"
+        );
     }
 }

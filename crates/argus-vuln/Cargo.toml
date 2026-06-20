@@ -18,3 +18,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# `test-util` (not part of tokio's `full`) gives the rate-gate test a paused
+# clock so its pacing assertions are deterministic, not wall-clock-flaky.
+tokio = { workspace = true, features = ["test-util"] }

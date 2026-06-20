@@ -101,11 +101,14 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       console and API are cross-origin, so this needs `SameSite=None` + an
       anti-CSRF token). *Done when:* no JWT is readable from JS and CSRF is
       covered by a test.
-- [ ] **NVD enrichment concurrency.** The rate-limit gate currently serializes
-      *all* product fetches process-wide (one slow product blocks every
-      tenant). Replace the global `await`-held mutex with a per-product
-      single-flight + a token-bucket limiter. *Done when:* a 4000-CVE product
-      fetch does not stall other tenants' enrichment.
+- [x] **NVD enrichment concurrency.** The old global gate was held for a
+      product's whole paginated fetch, so one slow/large product blocked every
+      tenant. Replaced with a per-`vendor:product` single-flight (`OnceCell`)
+      plus a reservation-based rate gate whose lock is held only for the slot
+      arithmetic, never across the fetch — different products fetch
+      concurrently while the aggregate request rate stays within NVD's limit.
+      A 4000-CVE product fetch now delays others by at most one spacing
+      interval, not its whole multi-page duration.
 - [ ] **Horizontal scale.** Login rate limiter and the monitor scheduler are
       single-instance (in-memory limiter; atomic DB claim is replica-safe but
       the limiter is not). Back the limiter with Postgres/Redis. *Done when:*
