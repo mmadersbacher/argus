@@ -53,6 +53,14 @@ async fn main() -> ExitCode {
         if !fp.evidence.is_empty() {
             println!("      evidence: {}", fp.evidence.join(" · "));
         }
+        // Per-service banners — where the HTTP/TLS/SSDP/WS-Discovery/CoAP/SNMP
+        // enrichment lands. Only services that revealed something are shown.
+        for svc in &host.services {
+            if let Some(banner) = &svc.banner {
+                let product = svc.product.as_deref().unwrap_or("-");
+                println!("      :{:<5} {product:<13} {banner}", svc.port);
+            }
+        }
     }
     ExitCode::SUCCESS
 }

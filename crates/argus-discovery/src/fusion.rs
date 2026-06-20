@@ -79,13 +79,16 @@ fn vendor_profile(vendor: &str, ports: &[u16]) -> Option<Profile> {
                 ("apple-mobile", AssetType::Mobile, None, None)
             }
         }
-        () if v.contains("samsung")
-            || v.contains("google")
-            || v.contains("nest")
+        // Single-purpose consumer-media/IoT OUIs only. Deliberately NOT here:
+        // Samsung, LG, Google, Apple — conglomerates whose OUI ships on phones,
+        // tablets, TVs, appliances and hubs alike, so the OUI cannot pin a class.
+        // Those are left to a protocol signal (SSDP/mDNS/miIO) to classify, the
+        // same discipline the Xiaomi miIO path enforces. Apple is handled above
+        // (port-gated); Samsung/LG/Google get vendor-only until a probe confirms.
+        () if v.contains("nest")
             || v.contains("amazon")
             || v.contains("sonos")
-            || v.contains("roku")
-            || v.contains("lg electronics") =>
+            || v.contains("roku") =>
         {
             ("smart-home-or-media", AssetType::Iot, None, None)
         }
@@ -107,7 +110,10 @@ fn os_from_banners(banners: &[String]) -> Option<String> {
         "Linux (Ubuntu)"
     } else if hay.contains("routeros") || hay.contains("mikrotik") {
         "RouterOS"
-    } else if hay.contains("windows") || hay.contains("microsoft-ds") {
+    } else if hay.contains("windows")
+        || hay.contains("microsoft-ds")
+        || hay.contains("microsoft-iis")
+    {
         "Windows"
     } else if hay.contains("freebsd") {
         "FreeBSD"
@@ -119,9 +125,76 @@ fn os_from_banners(banners: &[String]) -> Option<String> {
     Some(os.to_owned())
 }
 
+/// Infer a `(device_type, asset_type)` from a lowercased identity haystack built
+/// from hostnames, service banners, product tokens and the model — the signals
+/// SSDP / WS-Discovery / mDNS / HTTP / CoAP / TLS contribute. Used only as a
+/// fallback when the MAC/OUI vendor profile did not already classify the host.
+fn device_from_identity(hay: &str) -> Option<(&'static str, AssetType)> {
+    let has = |k: &str| hay.contains(k);
+    Some(match () {
+        () if has("laserjet")
+            || has("officejet")
+            || has("printer")
+            || has("print")
+            || has("_ipp")
+            || has("pdl") =>
+        {
+            ("printer", AssetType::Iot)
+        }
+        () if has("onvif")
+            || has("networkvideotransmitter")
+            || has("ipcam")
+            || has("ip camera")
+            || has("hikvision")
+            || has("dahua")
+            || has("nvr") =>
+        {
+            ("ip-camera", AssetType::Iot)
+        }
+        () if has("mediarenderer")
+            || has("mediaserver")
+            || has("roku")
+            || has("chromecast")
+            || has("googlecast")
+            || has("appletv")
+            || has("smarttv")
+            || has("airplay") =>
+        {
+            ("media-device", AssetType::Iot)
+        }
+        () if has("internetgateway")
+            || has("openwrt")
+            || has("routeros")
+            || has("dd-wrt")
+            || has("fritz")
+            || has("router")
+            || has("gateway") =>
+        {
+            ("router-or-ap", AssetType::Network)
+        }
+        () if has("synology") || has("qnap") || has("truenas") || has("freenas") => {
+            ("nas", AssetType::It)
+        }
+        () if has("raspberry") || has("raspbian") => ("single-board-computer", AssetType::It),
+        () if has("espressif")
+            || has("tasmota")
+            || has("shelly")
+            || has("sonoff")
+            || has("tuya")
+            || has("coap") =>
+        {
+            ("iot-device", AssetType::Iot)
+        }
+        () => return None,
+    })
+}
+
 fn fuse_one(host: &mut DiscoveredHost) {
     let ports = host.open_ports.clone();
     let vendor = host.asset.fingerprint.vendor.clone();
+    // A host present at L2 (it answered ARP, so it has a MAC) but with no open
+    // scanned TCP port is the class only active-ARP discovery surfaces.
+    let l2_only = ports.is_empty() && host.asset.interfaces.iter().any(|i| i.mac.is_some());
     let hostnames: Vec<String> = host
         .asset
         .interfaces
@@ -133,6 +206,21 @@ fn fuse_one(host: &mut DiscoveredHost) {
         .iter()
         .filter_map(|s| s.banner.clone().or_else(|| s.product.clone()))
         .collect();
+    // Service product tokens (e.g. "CoAP", "WS-Discovery", "SSDP/UPnP") feed the
+    // identity fallback even when a service's banner is what `banners` captured.
+    let products: Vec<String> = host
+        .services
+        .iter()
+        .filter_map(|s| s.product.clone())
+        .collect();
+    // A miIO handshake (UDP 54321) is positive, unauthenticated proof of a Xiaomi
+    // smart-home device — strong identity even with zero open TCP ports, and the
+    // only signal that should lift a Xiaomi OUI past "unknown" (the OUI alone
+    // spans phones and IoT alike, so it must not classify on its own).
+    let is_miio = host
+        .services
+        .iter()
+        .any(|s| s.product.as_deref() == Some("miIO"));
 
     let fp = &mut host.asset.fingerprint;
     let mut evidence: Vec<String> = Vec::new();
@@ -180,8 +268,48 @@ fn fuse_one(host: &mut DiscoveredHost) {
         }
     }
 
+    // Protocol-grounded identity OVERRIDES a weak port-pattern guess and the OUI
+    // profile: a device that announces what it is (SSDP/WSD/mDNS/IPP/RTSP/HTTP/TLS
+    // strings, model, hostname) beats an inference from which ports it left open.
+    // This is what makes a Samsung TV on :8080 read as a media-device, and an IPP
+    // printer's make/model win over the bare port-class "printer".
+    {
+        let model = fp.model.clone().unwrap_or_default();
+        let hay = format!(
+            "{} {} {} {}",
+            hostnames.join(" "),
+            banners.join(" "),
+            products.join(" "),
+            model
+        )
+        .to_lowercase();
+        if let Some((device_type, asset_type)) = device_from_identity(&hay) {
+            if fp.device_type.as_deref() != Some(device_type) {
+                evidence.push(format!("id:{device_type}"));
+            }
+            conf += 12;
+            fp.device_type = Some(device_type.to_owned());
+            host.asset.asset_type = asset_type;
+        }
+    }
+
+    // miIO is definitive proof of a Xiaomi smart-home device and runs last so a
+    // weaker signal cannot override it — but it yields (via get_or_insert) to a
+    // more specific protocol identity, e.g. a Xiaomi camera already set ip-camera.
+    if is_miio {
+        evidence.push("miio".to_owned());
+        conf += 25;
+        fp.device_type
+            .get_or_insert_with(|| "smart-home-device".to_owned());
+        if host.asset.asset_type == AssetType::Unknown {
+            host.asset.asset_type = AssetType::Iot;
+        }
+    }
+
     if !ports.is_empty() {
         evidence.push(format!("ports:{}", ports.len()));
+    } else if l2_only {
+        evidence.push("l2-only".to_owned());
     }
 
     fp.confidence = u8::try_from(conf.min(95)).unwrap_or(95);
@@ -300,5 +428,97 @@ mod tests {
         let mut h = host(None, vec![], None, None);
         fuse_one(&mut h);
         assert!(h.asset.fingerprint.confidence <= 15);
+    }
+
+    #[test]
+    fn miio_response_classifies_xiaomi_as_smart_home() {
+        let mut h = host(
+            Some("Beijing Xiaomi Mobile Software Co., Ltd"),
+            vec![],
+            None,
+            None,
+        );
+        h.services.push(Service {
+            port: 54321,
+            protocol: Protocol::Udp,
+            product: Some("miIO".to_owned()),
+            banner: Some("device_id=0x2cc9f8a8 stamp=1".to_owned()),
+            cpe: None,
+        });
+        fuse_one(&mut h);
+        assert_eq!(h.asset.asset_type, AssetType::Iot);
+        assert_eq!(
+            h.asset.fingerprint.device_type.as_deref(),
+            Some("smart-home-device")
+        );
+        assert!(h.asset.fingerprint.evidence.iter().any(|e| e == "miio"));
+        assert!(h.asset.fingerprint.confidence >= 40);
+    }
+
+    #[test]
+    fn xiaomi_oui_without_miio_stays_unclassified() {
+        // The discipline the engine must hold: a Xiaomi OUI alone proves nothing
+        // (the same prefix ships on phones and IoT), so with no positive protocol
+        // signal the device must remain Unknown — never guessed as a phone or a
+        // smart-home device.
+        let mut h = host(
+            Some("Beijing Xiaomi Mobile Software Co., Ltd"),
+            vec![],
+            None,
+            None,
+        );
+        fuse_one(&mut h);
+        assert_eq!(h.asset.asset_type, AssetType::Unknown);
+        assert_eq!(h.asset.fingerprint.device_type, None);
+    }
+
+    #[test]
+    fn samsung_oui_alone_does_not_assume_a_class() {
+        // Same discipline beyond Xiaomi: Samsung ships phones, tablets, TVs,
+        // fridges and SmartThings hubs on one OUI — the prefix alone must not
+        // assert "smart-home". Only a protocol signal (SSDP/mDNS) may classify.
+        let mut h = host(Some("Samsung Electronics Co.,Ltd"), vec![], None, None);
+        fuse_one(&mut h);
+        assert_eq!(h.asset.asset_type, AssetType::Unknown);
+        assert_eq!(h.asset.fingerprint.device_type, None);
+    }
+
+    #[test]
+    fn protocol_identity_overrides_port_class_guess() {
+        // A device the port-class called "web-server" (e.g. a TV's HTTP on :8080)
+        // must be reclassified when a protocol banner says what it really is.
+        let mut h = host(None, vec![8080], None, None);
+        h.asset.fingerprint.device_type = Some("web-server".to_owned()); // port-class guess
+        h.services.push(Service {
+            port: 5353,
+            protocol: Protocol::Udp,
+            product: Some("mDNS".to_owned()),
+            banner: Some("_airplay._tcp, _spotify-connect._tcp".to_owned()),
+            cpe: None,
+        });
+        fuse_one(&mut h);
+        assert_eq!(
+            h.asset.fingerprint.device_type.as_deref(),
+            Some("media-device")
+        );
+        assert_eq!(h.asset.asset_type, AssetType::Iot);
+    }
+
+    #[test]
+    fn ipp_make_and_model_keeps_printer_class() {
+        // The IPP make/model banner corroborates the port-class "printer" and
+        // flows the real model in via the identity haystack.
+        let mut h = host(None, vec![631], None, None);
+        h.asset.fingerprint.device_type = Some("printer".to_owned());
+        h.services.push(Service {
+            port: 631,
+            protocol: Protocol::Tcp,
+            product: None,
+            banner: Some("ipp: HP LaserJet Pro M404 state=idle".to_owned()),
+            cpe: None,
+        });
+        fuse_one(&mut h);
+        assert_eq!(h.asset.fingerprint.device_type.as_deref(), Some("printer"));
+        assert_eq!(h.asset.asset_type, AssetType::Iot);
     }
 }

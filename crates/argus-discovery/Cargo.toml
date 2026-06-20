@@ -16,6 +16,7 @@ argus-core = { path = "../argus-core" }
 tokio = { workspace = true }
 ipnet = { workspace = true }
 roxmltree = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }

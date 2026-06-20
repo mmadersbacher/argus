@@ -8,25 +8,39 @@
 //! for large ranges. Passive sensing gets layered on top later.
 
 pub mod arp;
+pub mod arpscan;
 pub mod banner;
+pub mod coap;
 pub mod fingerprint;
 pub mod fusion;
+pub mod http;
+pub mod ipp;
 pub mod masscan;
 pub mod mdns;
+pub mod miio;
 pub mod netbios;
 pub mod nmap;
 pub mod oui;
 pub mod portscan;
+pub mod rdns;
+pub mod rtsp;
 pub mod sampling;
 pub mod snmp;
+pub mod ssdp;
 pub mod target;
+pub mod tls;
+pub mod wsd;
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use argus_core::{Asset, AssetId, Criticality, Exposure, Interface, MacAddr, Protocol, Service};
+use std::fmt::Write as _;
+
+use argus_core::{
+    Asset, AssetId, AssetType, Criticality, Exposure, Interface, MacAddr, Protocol, Service,
+};
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
@@ -191,13 +205,514 @@ pub async fn deep_scan(
 /// where hostnames/models and the confident identity come from, regardless of
 /// whether the engine was connect, nmap or masscan+nmap.
 pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
-    let found = mdns::discover(Duration::from_millis(2500)).await;
     let set: HashSet<IpAddr> = scope.iter().copied().collect();
-    merge_mdns(hosts, found, &set);
+
+    // --- Discovery sources: ADD devices the connect scan cannot see. ---
+    // Active ARP first (L2 ground truth on the local segment), then the four
+    // multicast protocols run concurrently (independent UDP listens, so one
+    // shared ~2.5s window instead of four serial ones).
+    arp_discover(hosts, scope).await;
+    let (mdns_found, ssdp_found, wsd_found, coap_found, miio_found) = tokio::join!(
+        mdns::discover(Duration::from_millis(2500)),
+        ssdp::discover(Duration::from_millis(2500)),
+        wsd::discover(Duration::from_millis(2500)),
+        coap::discover(Duration::from_secs(2)),
+        miio::discover(scope, Duration::from_secs(2)),
+    );
+    merge_mdns(hosts, mdns_found, &set);
+    merge_ssdp(hosts, ssdp_found, &set);
+    merge_wsd(hosts, wsd_found, &set);
+    merge_coap(hosts, coap_found, &set);
+    merge_miio(hosts, miio_found, &set);
+
+    // --- Enrichment: refine every known host with unicast probes. ---
     netbios_probe(hosts).await;
     snmp_probe(hosts).await;
+    rdns_enrich(hosts).await;
+    tls_enrich(hosts).await;
+    http_enrich(hosts).await;
+    ipp_enrich(hosts).await;
+    rtsp_enrich(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
+}
+
+/// Active-ARP host discovery: sweep the in-scope local segment and merge every
+/// device that replies into `hosts`, adding the ones not already present.
+///
+/// This is what turns "hosts with an open port" into "every device on the wire":
+/// a device answering only ARP (firewalled phone, silent IoT, sleeping printer)
+/// is added with its MAC set, then classified from its OUI by the later enrich
+/// passes. Gated to internal IPv4 targets — ARP is IPv4-only and meaningful only
+/// on a directly-attached segment — and to hosts where `arp-scan` is installed
+/// and privileged; otherwise it is a no-op (best-effort, like masscan).
+async fn arp_discover(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
+    let targets: Vec<IpAddr> = scope
+        .iter()
+        .copied()
+        .filter(|ip| ip.is_ipv4() && is_internal(*ip))
+        .collect();
+    if targets.is_empty() || !arpscan::available().await {
+        return;
+    }
+    let Ok(found) = arpscan::sweep(&targets, Duration::from_secs(15)).await else {
+        return;
+    };
+    for arpscan::ArpHost { ip, mac } in found {
+        if let Some(host) = hosts
+            .iter_mut()
+            .find(|h| h.asset.interfaces.iter().any(|i| i.ip == Some(ip)))
+        {
+            if let Some(iface) = host.asset.interfaces.first_mut() {
+                iface.mac.get_or_insert(mac);
+            }
+        } else {
+            let mut host = base_host(ip);
+            if let Some(iface) = host.asset.interfaces.first_mut() {
+                iface.mac = Some(mac);
+            }
+            hosts.push(host);
+        }
+    }
+}
+
+/// Find the host carrying `ip`, or append a fresh one; returns its index.
+fn upsert_host(hosts: &mut Vec<DiscoveredHost>, ip: IpAddr) -> usize {
+    let existing = hosts
+        .iter()
+        .position(|h| h.asset.interfaces.iter().any(|i| i.ip == Some(ip)));
+    existing.unwrap_or_else(|| {
+        hosts.push(base_host(ip));
+        hosts.len() - 1
+    })
+}
+
+/// Join the non-empty parts with ` | `, or `None` if all are empty.
+fn join_nonempty(parts: &[Option<&str>]) -> Option<String> {
+    let kept: Vec<&str> = parts
+        .iter()
+        .filter_map(|p| p.map(str::trim))
+        .filter(|s| !s.is_empty())
+        .collect();
+    (!kept.is_empty()).then(|| kept.join(" | "))
+}
+
+/// Merge SSDP/UPnP findings: add in-scope responders, fold in friendlyName
+/// (hostname), modelName (model), deviceType (asset class) and a SERVER banner.
+fn merge_ssdp(
+    hosts: &mut Vec<DiscoveredHost>,
+    found: Vec<ssdp::SsdpHost>,
+    scope: &HashSet<IpAddr>,
+) {
+    for s in found {
+        if !scope.contains(&s.ip) {
+            continue;
+        }
+        let idx = upsert_host(hosts, s.ip);
+        let host = &mut hosts[idx];
+        if let Some(name) = s.friendly_name.clone() {
+            if let Some(iface) = host.asset.interfaces.first_mut() {
+                iface.hostname.get_or_insert(name);
+            }
+        }
+        if host.asset.fingerprint.model.is_none() {
+            host.asset.fingerprint.model.clone_from(&s.model_name);
+        }
+        if host.asset.asset_type == AssetType::Unknown {
+            if let Some(dt) = &s.device_type {
+                host.asset.asset_type = ssdp_asset_type(dt);
+            }
+        }
+        if !host.services.iter().any(|x| x.port == 1900) {
+            let banner = join_nonempty(&[
+                s.server.as_deref(),
+                s.manufacturer.as_deref(),
+                s.model_name.as_deref(),
+                s.device_type.as_deref(),
+            ]);
+            host.services.push(Service {
+                port: 1900,
+                protocol: Protocol::Udp,
+                product: Some("SSDP/UPnP".to_owned()),
+                banner,
+                cpe: None,
+            });
+        }
+    }
+}
+
+/// UPnP `deviceType` → asset class. Gateways are network gear; most other UPnP
+/// roots are consumer media/IoT. Anything unrecognised stays `Unknown` for fusion.
+fn ssdp_asset_type(device_type: &str) -> AssetType {
+    let d = device_type.to_lowercase();
+    if d.contains("internetgateway") || d.contains("wandevice") || d.contains("wanconnection") {
+        AssetType::Network
+    } else if d.contains("mediarenderer")
+        || d.contains("mediaserver")
+        || d.contains("printer")
+        || d.contains("light")
+        || d.contains("basic")
+    {
+        AssetType::Iot
+    } else {
+        AssetType::Unknown
+    }
+}
+
+/// Merge WS-Discovery findings: add in-scope responders, classify from the
+/// advertised Types (printer/camera/computer), and record a Types/XAddrs banner.
+fn merge_wsd(hosts: &mut Vec<DiscoveredHost>, found: Vec<wsd::WsdHost>, scope: &HashSet<IpAddr>) {
+    for w in found {
+        if !scope.contains(&w.ip) {
+            continue;
+        }
+        let idx = upsert_host(hosts, w.ip);
+        let host = &mut hosts[idx];
+        if host.asset.asset_type == AssetType::Unknown {
+            host.asset.asset_type = wsd_asset_type(&w.types);
+        }
+        if !host.services.iter().any(|x| x.port == 3702) {
+            let types = w.types.join(" ");
+            let banner = join_nonempty(&[
+                (!types.is_empty()).then_some(types.as_str()),
+                w.xaddrs.first().map(String::as_str),
+            ]);
+            host.services.push(Service {
+                port: 3702,
+                protocol: Protocol::Udp,
+                product: Some("WS-Discovery".to_owned()),
+                banner,
+                cpe: None,
+            });
+        }
+    }
+}
+
+/// WS-Discovery `Types` QNames → asset class.
+fn wsd_asset_type(types: &[String]) -> AssetType {
+    let joined = types.join(" ").to_lowercase();
+    if joined.contains("print")
+        || joined.contains("networkvideotransmitter")
+        || joined.contains("onvif")
+    {
+        AssetType::Iot
+    } else if joined.contains("computer") || joined.contains("device") {
+        AssetType::It
+    } else {
+        AssetType::Unknown
+    }
+}
+
+/// Merge CoAP findings: add in-scope responders as IoT and record their
+/// advertised resource list.
+fn merge_coap(
+    hosts: &mut Vec<DiscoveredHost>,
+    found: Vec<coap::CoapHost>,
+    scope: &HashSet<IpAddr>,
+) {
+    for c in found {
+        if !scope.contains(&c.ip) {
+            continue;
+        }
+        let idx = upsert_host(hosts, c.ip);
+        let host = &mut hosts[idx];
+        if host.asset.asset_type == AssetType::Unknown {
+            host.asset.asset_type = AssetType::Iot;
+        }
+        if !host.services.iter().any(|x| x.port == 5683) {
+            let res = c.resources.join(",");
+            host.services.push(Service {
+                port: 5683,
+                protocol: Protocol::Udp,
+                product: Some("CoAP".to_owned()),
+                banner: (!res.is_empty()).then_some(res),
+                cpe: None,
+            });
+        }
+    }
+}
+
+/// Merge miIO findings: record the UDP-54321 handshake (device id + stamp) as a
+/// service. The Xiaomi-IoT classification is deliberately left to `fusion`, which
+/// keys off this service — so the OUI alone never upgrades a host's class; only
+/// the positive, unauthenticated miIO response does.
+fn merge_miio(
+    hosts: &mut Vec<DiscoveredHost>,
+    found: Vec<miio::MiioHost>,
+    scope: &HashSet<IpAddr>,
+) {
+    for m in found {
+        if !scope.contains(&m.ip) {
+            continue;
+        }
+        let idx = upsert_host(hosts, m.ip);
+        let host = &mut hosts[idx];
+        if !host.services.iter().any(|x| x.port == 54321) {
+            host.services.push(Service {
+                port: 54321,
+                protocol: Protocol::Udp,
+                product: Some("miIO".to_owned()),
+                banner: Some(format!("device_id=0x{:08x} stamp={}", m.device_id, m.stamp)),
+                cpe: None,
+            });
+        }
+    }
+}
+
+/// Reverse-DNS (PTR) every host that still lacks a hostname, concurrently.
+async fn rdns_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let targets: Vec<(usize, IpAddr)> = hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            let iface = h.asset.interfaces.first()?;
+            if iface.hostname.is_some() {
+                return None;
+            }
+            iface.ip.map(|ip| (i, ip))
+        })
+        .collect();
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, rdns::lookup(ip, Duration::from_millis(1500)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(name))) = joined else {
+            continue;
+        };
+        if let Some(iface) = hosts[idx].asset.interfaces.first_mut() {
+            iface.hostname.get_or_insert(name);
+        }
+    }
+}
+
+/// Ports we attempt a TLS certificate harvest on.
+const TLS_PORTS: &[u16] = &[443, 8443, 9443, 4443];
+
+/// Harvest the leaf TLS certificate from each host's open TLS ports, folding the
+/// subject/SAN hostname and an issuer/SAN banner back in.
+async fn tls_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    if !tls::available().await {
+        return;
+    }
+    let mut targets: Vec<(usize, IpAddr, u16)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        for &p in &h.open_ports {
+            if TLS_PORTS.contains(&p) {
+                targets.push((i, ip, p));
+            }
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip, port) in targets {
+        set.spawn(async move { (idx, port, tls::cert(ip, port, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, port, Some(cert))) = joined else {
+            continue;
+        };
+        apply_tls(&mut hosts[idx], port, &cert);
+    }
+}
+
+/// Fold a harvested certificate onto a host: a DNS-name identity and a banner.
+fn apply_tls(host: &mut DiscoveredHost, port: u16, cert: &tls::TlsCert) {
+    let name = cert
+        .subject_cn
+        .clone()
+        .filter(|n| is_dns_name(n))
+        .or_else(|| cert.sans.iter().find(|s| is_dns_name(s)).cloned());
+    if let Some(name) = name {
+        if let Some(iface) = host.asset.interfaces.first_mut() {
+            iface.hostname.get_or_insert(name);
+        }
+    }
+    let mut facet = String::from("tls:");
+    if let Some(cn) = &cert.subject_cn {
+        let _ = write!(facet, " CN={cn}");
+    }
+    if let Some(issuer) = &cert.issuer {
+        let _ = write!(facet, " issuer={issuer}");
+    }
+    if !cert.sans.is_empty() {
+        let _ = write!(facet, " SAN={}", cert.sans.join(","));
+    }
+    enrich_service_banner(host, port, facet, "tls:");
+}
+
+/// HTTP-fingerprint each host's open web ports (plain and TLS), concurrently.
+async fn http_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr, u16, bool)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        for &p in &h.open_ports {
+            if let Some(is_tls) = web_kind(p) {
+                targets.push((i, ip, p, is_tls));
+            }
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip, port, is_tls) in targets {
+        set.spawn(async move {
+            (
+                idx,
+                port,
+                http::fingerprint(ip, port, is_tls, Duration::from_secs(4)).await,
+            )
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, port, Some(info))) = joined else {
+            continue;
+        };
+        apply_http(&mut hosts[idx], port, &info);
+    }
+}
+
+/// Map a port to its web kind: `Some(false)` = plain HTTP, `Some(true)` = HTTPS,
+/// `None` = not a web port we fingerprint.
+fn web_kind(port: u16) -> Option<bool> {
+    match port {
+        80 | 8080 | 8000 | 8008 | 8081 | 8888 | 5000 | 3000 => Some(false),
+        443 | 8443 | 9443 | 4443 => Some(true),
+        _ => None,
+    }
+}
+
+/// Fold an HTTP fingerprint onto a host as a service banner facet.
+fn apply_http(host: &mut DiscoveredHost, port: u16, info: &http::HttpInfo) {
+    let mut facet = format!("http:{}", info.status);
+    if let Some(server) = &info.server {
+        let _ = write!(facet, " Server={server}");
+    }
+    if let Some(pb) = &info.powered_by {
+        let _ = write!(facet, " X-Powered-By={pb}");
+    }
+    if let Some(title) = &info.title {
+        let _ = write!(facet, " title={title}");
+    }
+    enrich_service_banner(host, port, facet, "http:");
+}
+
+/// Append a banner `facet` to the service on `port` (creating a bare service if
+/// none exists). `guard` makes it idempotent: a facet whose marker is already
+/// present is not re-appended, so repeated enrich passes don't duplicate it.
+fn enrich_service_banner(host: &mut DiscoveredHost, port: u16, facet: String, guard: &str) {
+    if let Some(svc) = host.services.iter_mut().find(|s| s.port == port) {
+        if svc.banner.as_deref().is_some_and(|b| b.contains(guard)) {
+            return;
+        }
+        match &mut svc.banner {
+            Some(b) => {
+                b.push_str(" | ");
+                b.push_str(&facet);
+            }
+            None => svc.banner = Some(facet),
+        }
+    } else {
+        host.services.push(Service {
+            port,
+            protocol: Protocol::Tcp,
+            product: None,
+            banner: Some(facet),
+            cpe: None,
+        });
+    }
+}
+
+/// Whether `s` is a usable DNS name (not empty, not an IP literal, not a wildcard).
+fn is_dns_name(s: &str) -> bool {
+    !s.is_empty() && s.contains('.') && !s.starts_with('*') && s.parse::<IpAddr>().is_err()
+}
+
+/// Probe each host with an open IPP port (631) for printer make/model/state —
+/// the exact identity a port-class "printer" guess cannot give.
+async fn ipp_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&631) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, ipp::query(ip, 631, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(printer))) = joined else {
+            continue;
+        };
+        apply_ipp(&mut hosts[idx], &printer);
+    }
+}
+
+/// Fold an IPP printer's attributes onto a host: its make/model and a banner.
+fn apply_ipp(host: &mut DiscoveredHost, printer: &ipp::IppPrinter) {
+    if host.asset.fingerprint.model.is_none() {
+        host.asset
+            .fingerprint
+            .model
+            .clone_from(&printer.make_and_model);
+    }
+    let mut facet = String::from("ipp:");
+    if let Some(mm) = &printer.make_and_model {
+        let _ = write!(facet, " {mm}");
+    }
+    if let Some(state) = &printer.state {
+        let _ = write!(facet, " state={state}");
+    }
+    if let Some(loc) = &printer.location {
+        let _ = write!(facet, " loc={loc}");
+    }
+    enrich_service_banner(host, 631, facet, "ipp:");
+}
+
+/// Probe each host with an open RTSP port (554) for its camera/NVR server banner.
+async fn rtsp_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&554) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, rtsp::query(ip, 554, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(info))) = joined else {
+            continue;
+        };
+        apply_rtsp(&mut hosts[idx], &info);
+    }
+}
+
+/// Fold an RTSP server banner (the camera/NVR identifier) onto a host.
+fn apply_rtsp(host: &mut DiscoveredHost, info: &rtsp::RtspInfo) {
+    let mut facet = format!("rtsp:{}", info.status);
+    if let Some(server) = &info.server {
+        let _ = write!(facet, " Server={server}");
+    }
+    if let Some(public) = &info.public {
+        let _ = write!(facet, " Public={public}");
+    }
+    enrich_service_banner(host, 554, facet, "rtsp:");
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {

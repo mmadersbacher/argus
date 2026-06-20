@@ -81,6 +81,7 @@ dependencies = [
  "argus-core",
  "argus-intel",
  "ipnet",
+ "reqwest",
  "roxmltree",
  "serde",
  "socket2 0.5.10",
