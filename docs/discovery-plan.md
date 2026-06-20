@@ -84,6 +84,15 @@ banner→product parsing, SMBv1 probe, SSRF guard, port-pattern classification.
   port-class**. Live proof: the gateway `.1 mediarouter.home` went It/web-server →
   Network/router-or-ap; a Samsung `.104` went to Iot/media-device on its mDNS name
   instead of an OUI guess. 2 guard tests lock the override. Discovery modules: 25.
+- **P1g — raw-port printer (PJL) + MQTT broker + multi-round union.**
+  Status: **DONE.** `pjl.rs` (PJL `@PJL INFO ID` on JetDirect 9100 → printer model
+  for printers that expose neither IPP nor mDNS); `mqtt.rs` (MQTT 3.1.1
+  `CONNECT`/`CONNACK` on 1883/8883 → broker confirmation + anonymous-vs-auth
+  state). `argus_discovery::accumulate()` + the CLI `--rounds N` flag union N scan
+  rounds so a device asleep for one power-saving-Wi-Fi sweep still persists —
+  verified: rounds saw 12/9/10 live, the union held all 12. (The persistent API
+  store already unions across scans by `correlation_key`; this brings the same to
+  the stateless CLI.) 27 discovery modules; 115 tests.
 - **P3 — Active ARP + dedup.** Privileged ARP sweep finds L3-filtered hosts;
   merge multi-homed observations into one asset via strong identity keys.
   Status: **active-ARP DONE** — `arpscan.rs` shells to `arp-scan` (`--quiet
