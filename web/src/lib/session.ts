@@ -1,11 +1,12 @@
 // Client-side session persistence, exposed as a tiny external store so React
-// can subscribe via useSyncExternalStore. Single source of truth for the
-// stored token, shared by the API client and the auth context.
+// can subscribe via useSyncExternalStore. Holds only the display identity
+// (email/role/tenant); the JWT itself lives in an HttpOnly cookie the browser
+// sends automatically and JS can never read. Shared by the API client and the
+// auth context.
 
 export type Role = "viewer" | "analyst" | "admin";
 
 export interface Session {
-  token: string;
   email: string;
   role: Role;
   tenant_id: string;
@@ -21,31 +22,16 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-// Decode a JWT's `exp` (unix seconds) WITHOUT verifying the signature — the
-// server stays the authority. This only avoids treating an obviously-expired
-// token as a live session (and the flash of protected chrome that causes).
-function tokenExpired(token: string): boolean {
-  const payload = token.split(".")[1];
-  if (!payload) return false;
-  try {
-    const claims = JSON.parse(
-      atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
-    ) as { exp?: number };
-    return typeof claims.exp === "number" && Date.now() >= claims.exp * 1000;
-  } catch {
-    // Unparseable → let the server decide (it returns 401); don't force a logout.
-    return false;
-  }
-}
-
 function read(): Session | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Session;
-    if (!parsed.token || tokenExpired(parsed.token)) {
-      // Blank or expired token is not a session — drop it so it isn't re-sent.
+    // The session's authority is the HttpOnly cookie; this record is just the
+    // display identity. A malformed one is dropped — the server (401) is the
+    // real arbiter of whether the cookie is still valid.
+    if (!parsed.email || !parsed.role || !parsed.tenant_id) {
       window.localStorage.removeItem(KEY);
       return null;
     }

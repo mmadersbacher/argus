@@ -32,7 +32,7 @@ interface AuthValue {
     email: string,
     password: string,
   ) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
@@ -54,8 +54,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const adopt = useCallback((res: api.SessionResponse) => {
+    // Only the display identity is kept; the JWT is in the HttpOnly cookie.
     storeSession({
-      token: res.token,
       email: res.email,
       role: res.role,
       tenant_id: res.tenant_id,
@@ -74,7 +74,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [adopt],
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Clear the HttpOnly cookies server-side first (JS can't clear them), then
+    // drop the local display session. Await so the request isn't cancelled by
+    // the navigation below — otherwise the session cookie would survive.
+    await api.logout().catch(() => {});
     clearSession();
     // Hard-navigate so no protected view lingers on a stale render. The
     // AppShell guard effect would also catch this, but logout must not depend

@@ -1,7 +1,7 @@
 // Typed client for the argus-api backend. Mirrors the JSON shapes emitted by
 // crates/argus-api (serde) so the console stays in lockstep with the domain.
 
-import { clearSession, loadSession, type Role, type Session } from "./session";
+import { clearSession, type Role, type Session } from "./session";
 
 export type RiskBand = "info" | "low" | "medium" | "high" | "critical";
 export type AssetType =
@@ -109,21 +109,40 @@ export interface ScanResult {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8088";
 
-/** Fetch wrapper: attaches the Bearer token, surfaces the API's error text,
- *  and bounces to /login when the session is rejected. Auth endpoints opt
- *  out of the bounce so a failed login shows its error inline. */
+/** JS-readable CSRF cookie set by the API, echoed back as a header. */
+const CSRF_COOKIE = "argus_csrf";
+const CSRF_HEADER = "x-csrf-token";
+
+/** Read a non-HttpOnly cookie value (the CSRF double-submit token). */
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  for (const part of document.cookie.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === name) return rest.join("=");
+  }
+  return null;
+}
+
+/** Fetch wrapper: sends the session cookie (`credentials: include`), echoes the
+ *  CSRF token on state-changing requests, surfaces the API's error text, and
+ *  bounces to /login when the session is rejected. Auth endpoints opt out of
+ *  the bounce so a failed login shows its error inline. */
 async function fetchJSON<T>(
   path: string,
   init?: RequestInit,
   opts?: { redirectOn401?: boolean },
 ): Promise<T> {
-  const session = loadSession();
   const headers = new Headers(init?.headers);
-  if (session && !headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${session.token}`);
+  // The HttpOnly session cookie authenticates automatically; unsafe methods
+  // must also echo the CSRF cookie in a header (double-submit).
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, csrf);
   }
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
+    credentials: "include",
     ...init,
     headers,
   });
@@ -143,7 +162,6 @@ async function fetchJSON<T>(
 // ---- auth -----------------------------------------------------------------
 
 export interface SessionResponse {
-  token: string;
   email: string;
   role: Role;
   tenant_id: string;
@@ -174,6 +192,10 @@ export const register = (
     },
     { redirectOn401: false },
   );
+
+/** Clear the session server-side (drops the HttpOnly cookies). */
+export const logout = () =>
+  fetchJSON<void>("/api/auth/logout", { method: "POST" });
 
 export interface UserSummary {
   id: string;
