@@ -18,6 +18,7 @@ pub mod nmap;
 pub mod oui;
 pub mod portscan;
 pub mod sampling;
+pub mod snmp;
 pub mod target;
 
 use std::collections::HashSet;
@@ -194,6 +195,7 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     let set: HashSet<IpAddr> = scope.iter().copied().collect();
     merge_mdns(hosts, found, &set);
     netbios_probe(hosts).await;
+    snmp_probe(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
 }
@@ -387,6 +389,48 @@ pub fn enrich_macs(hosts: &mut [DiscoveredHost]) {
                 if let Some(vendor) = oui.vendor(mac) {
                     host.asset.fingerprint.vendor = Some(vendor.to_owned());
                 }
+            }
+        }
+    }
+}
+
+/// Probe each host over SNMP (UDP 161, `public`), folding sysName/sysDescr in.
+async fn snmp_probe(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let targets: Vec<(usize, IpAddr)> = hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            h.asset
+                .interfaces
+                .first()
+                .and_then(|f| f.ip)
+                .map(|ip| (i, ip))
+        })
+        .collect();
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, snmp::query(ip, Duration::from_millis(800)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(res))) = joined else {
+            continue;
+        };
+        let host = &mut hosts[idx];
+        if let Some(name) = res.name {
+            if let Some(iface) = host.asset.interfaces.first_mut() {
+                iface.hostname.get_or_insert(name);
+            }
+        }
+        if let Some(descr) = res.descr {
+            if !host.services.iter().any(|s| s.port == 161) {
+                host.services.push(Service {
+                    port: 161,
+                    protocol: Protocol::Udp,
+                    product: Some("SNMP".to_owned()),
+                    banner: Some(descr),
+                    cpe: None,
+                });
             }
         }
     }
