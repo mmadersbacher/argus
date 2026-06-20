@@ -19,6 +19,7 @@ import {
   confidenceLabel,
   formatCvss,
   formatEpss,
+  isConfirmedConfidence,
   timeAgo,
 } from "@/lib/ui";
 import {
@@ -243,6 +244,7 @@ export function VulnsView() {
   const [q, setQ] = useState("");
   const [severity, setSeverity] = useState<"all" | Severity>("all");
   const [kevOnly, setKevOnly] = useState(false);
+  const [confirmedOnly, setConfirmedOnly] = useState(false);
 
   // If the selected CVE vanished from the rollup after a poll, close the drawer.
   useEffect(() => {
@@ -259,9 +261,10 @@ export function VulnsView() {
       if (needle && !v.cve_id.toLowerCase().includes(needle)) return false;
       if (severity !== "all" && v.severity !== severity) return false;
       if (kevOnly && !v.kev) return false;
+      if (confirmedOnly && !isConfirmedConfidence(v.confidence)) return false;
       return true;
     });
-  }, [vulns, q, severity, kevOnly]);
+  }, [vulns, q, severity, kevOnly, confirmedOnly]);
 
   // Full-page states only before the first successful load — after that,
   // failed polls keep the last good data on screen (the hook stays silent).
@@ -274,8 +277,11 @@ export function VulnsView() {
       ? null
       : (vulns.find((v) => v.cve_id === selectedId) ?? null);
 
-  const kevCount = vulns.filter((v) => v.kev).length;
-  const criticalCount = vulns.filter((v) => v.severity === "critical").length;
+  // Only confirmed (version-checked) CVEs count toward the headline numbers;
+  // potentials are surfaced but not counted as if confirmed.
+  const confirmed = vulns.filter((v) => isConfirmedConfidence(v.confidence));
+  const potentialCount = vulns.length - confirmed.length;
+  const kevCount = confirmed.filter((v) => v.kev).length;
   const assetsAffected = new Set(
     vulns.flatMap((v) => v.affected.map((a) => a.id)),
   ).size;
@@ -290,7 +296,7 @@ export function VulnsView() {
       </div>
 
       <LiveRegion
-        message={`${vulns.length} unique CVEs across ${assetsAffected} assets, ${kevCount} known-exploited, ${criticalCount} critical.`}
+        message={`${vulns.length} CVEs (${confirmed.length} confirmed, ${potentialCount} potential) across ${assetsAffected} assets, ${kevCount} confirmed known-exploited.`}
       />
 
       {vulns.length === 0 ? (
@@ -303,17 +309,22 @@ export function VulnsView() {
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Unique CVEs" value={vulns.length} />
+            <StatCard
+              label="Confirmed"
+              value={confirmed.length}
+              tone={confirmed.length > 0 ? "danger" : "default"}
+              hint="version-checked — drive risk"
+            />
+            <StatCard
+              label="Potential"
+              value={potentialCount}
+              hint="product present, version unverified"
+            />
             <StatCard
               label="Known exploited"
               value={kevCount}
               tone={kevCount > 0 ? "danger" : "default"}
-              hint="CISA KEV catalog"
-            />
-            <StatCard
-              label="Critical severity"
-              value={criticalCount}
-              tone={criticalCount > 0 ? "danger" : "default"}
+              hint="CISA KEV, among confirmed"
             />
             <StatCard
               label="Assets affected"
@@ -349,6 +360,11 @@ export function VulnsView() {
                     <option value="none">None</option>
                   </Select>
                 </div>
+                <Toggle
+                  checked={confirmedOnly}
+                  onChange={setConfirmedOnly}
+                  label="Confirmed only"
+                />
                 <Toggle checked={kevOnly} onChange={setKevOnly} label="KEV only" />
               </>
             }
