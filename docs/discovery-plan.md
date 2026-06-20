@@ -93,6 +93,20 @@ banner→product parsing, SMBv1 probe, SSRF guard, port-pattern classification.
   verified: rounds saw 12/9/10 live, the union held all 12. (The persistent API
   store already unions across scans by `correlation_key`; this brings the same to
   the stateless CLI.) 27 discovery modules; 115 tests.
+- **P2a — enterprise + OT identity (beyond SOHO).**
+  Status: **DONE in code, E2E-unproven (no AD/SQL/OT on the home test net).** For
+  company / industrial estates: `ldap.rs` (anonymous LDAP rootDSE on 389/636 →
+  defaultNamingContext + dnsHostName = Active Directory domain controller),
+  `mssql.rs` (SQL Server Browser UDP 1434 → instance names + exact version for
+  CVE correlation), and three **read-only** OT probes — `modbus.rs` (FC 43/14
+  Read Device Identification, 502 → vendor/product), `enip.rs` (EtherNet/IP
+  ListIdentity, UDP 44818 → CIP vendor/product/serial), `bacnet.rs` (Who-Is, UDP
+  47808 → device instance + vendor). All strictly identity-only: no writes, no
+  control-plane function codes — safe for fragile ICS. `fusion` now classifies
+  `domain-controller` (It) and `industrial-controller` (Ot) from these signals,
+  highest priority (protocol-confirmed beats any guess). 32 discovery modules;
+  142 tests; fmt0/clippy0. Caveat: enip/bacnet probe every known host on their
+  UDP port (UDP-only services have no TCP to gate on), adding ~1–2s to a /24.
 - **P3 — Active ARP + dedup.** Privileged ARP sweep finds L3-filtered hosts;
   merge multi-homed observations into one asset via strong identity keys.
   Status: **active-ARP DONE** — `arpscan.rs` shells to `arp-scan` (`--quiet
