@@ -91,6 +91,43 @@ fn precision(tp: usize, reported: usize) -> f64 {
     }
 }
 
+/// Report the headline FF1 result: grouping High/Confirmed as "confirmed"
+/// (version checked → drives the score) and Low/Medium as "potential" (product
+/// present, version unverified → surfaced but never scored), how precise is
+/// each bucket and how many false positives does filtering to confirmed remove?
+fn report_confirmed_vs_potential(outcomes: &[Outcome], fp: usize, applies_total: usize) {
+    let confirmed: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|o| o.confidence.is_some_and(|c| c >= Confidence::High))
+        .collect();
+    let potential: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|o| o.confidence.is_some_and(|c| c < Confidence::High))
+        .collect();
+    let conf_tp = confirmed.iter().filter(|o| o.applies).count();
+    let pot_tp = potential.iter().filter(|o| o.applies).count();
+    let fp_in_potential = potential.len() - pot_tp;
+    let fp_share = if fp == 0 {
+        0.0
+    } else {
+        100.0 * fp_in_potential as f64 / fp as f64
+    };
+    println!("\nconfirmed vs potential (score-driving vs surfaced-only):");
+    println!(
+        "  confirmed: precision {:.2} ({conf_tp}/{} reported drive the score)",
+        precision(conf_tp, confirmed.len()),
+        confirmed.len(),
+    );
+    println!(
+        "  potential: precision {:.2} ({pot_tp}/{} reported, never scored)",
+        precision(pot_tp, potential.len()),
+        potential.len(),
+    );
+    println!(
+        "  => filtering to confirmed removes {fp_in_potential}/{fp} false positives ({fp_share:.0}%), keeping {conf_tp}/{applies_total} true positives",
+    );
+}
+
 /// Run the FF1 harness on the embedded set, or on `path` if given.
 pub fn run(path: Option<String>) {
     let data = path.map_or_else(
@@ -160,6 +197,8 @@ pub fn run(path: Option<String>) {
             1.0 - p,
         );
     }
+
+    report_confirmed_vs_potential(&outcomes, fp, applies_total);
 
     // The honest exceptions, named: a High-confidence hit that is a false
     // positive means a catalog range too coarse to be trusted as "version
@@ -240,6 +279,37 @@ mod tests {
         assert!(
             prec(Confidence::High) > prec(Confidence::Low),
             "High tier must be more precise than Low"
+        );
+    }
+
+    #[test]
+    fn confirmed_bucket_is_precise_and_holds_no_false_positive_majority() {
+        // The model-level claim: grouping High/Confirmed as "confirmed" and
+        // Low/Medium as "potential", the confirmed bucket is more precise and
+        // the false positives concentrate in the potential bucket.
+        let cases = parse(GROUND_TRUTH);
+        let outcomes: Vec<Outcome> = cases.iter().map(evaluate).collect();
+        let bucket = |confirmed: bool| {
+            outcomes
+                .iter()
+                .filter(|o| {
+                    o.confidence
+                        .is_some_and(|c| (c >= Confidence::High) == confirmed)
+                })
+                .collect::<Vec<_>>()
+        };
+        let conf = bucket(true);
+        let pot = bucket(false);
+        let prec = |b: &[&Outcome]| precision(b.iter().filter(|o| o.applies).count(), b.len());
+        assert!(
+            prec(&conf) > prec(&pot),
+            "confirmed bucket must be more precise than potential"
+        );
+        let conf_fp = conf.iter().filter(|o| !o.applies).count();
+        let pot_fp = pot.iter().filter(|o| !o.applies).count();
+        assert!(
+            pot_fp > conf_fp,
+            "the false-positive reservoir must live in the potential bucket"
         );
     }
 }
