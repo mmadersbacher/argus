@@ -20,3 +20,6 @@ node_modules
 # Misc
 *.log
 .DS_Store
+
+# Runtime IntelCache snapshot (written to cwd by argus-api)
+intel-cache.json
