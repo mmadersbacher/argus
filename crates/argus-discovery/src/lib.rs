@@ -21,6 +21,7 @@ pub mod miio;
 pub mod netbios;
 pub mod nmap;
 pub mod oui;
+pub mod pjl;
 pub mod portscan;
 pub mod rdns;
 pub mod rtsp;
@@ -232,6 +233,7 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     tls_enrich(hosts).await;
     http_enrich(hosts).await;
     ipp_enrich(hosts).await;
+    pjl_enrich(hosts).await;
     rtsp_enrich(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
@@ -677,6 +679,46 @@ fn apply_ipp(host: &mut DiscoveredHost, printer: &ipp::IppPrinter) {
         let _ = write!(facet, " loc={loc}");
     }
     enrich_service_banner(host, 631, facet, "ipp:");
+}
+
+/// Probe each host with an open JetDirect port (9100) for its printer model via
+/// PJL — the identity for a raw-port printer that exposes neither IPP nor mDNS.
+async fn pjl_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&9100) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, pjl::query(ip, 9100, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(info))) = joined else {
+            continue;
+        };
+        apply_pjl(&mut hosts[idx], &info);
+    }
+}
+
+/// Fold a PJL printer identity onto a host: its model and a banner.
+fn apply_pjl(host: &mut DiscoveredHost, info: &pjl::PjlInfo) {
+    if host.asset.fingerprint.model.is_none() {
+        host.asset.fingerprint.model.clone_from(&info.id);
+    }
+    let mut facet = String::from("pjl:");
+    if let Some(id) = &info.id {
+        let _ = write!(facet, " {id}");
+    }
+    if let Some(status) = &info.status {
+        let _ = write!(facet, " status={status}");
+    }
+    enrich_service_banner(host, 9100, facet, "pjl:");
 }
 
 /// Probe each host with an open RTSP port (554) for its camera/NVR server banner.
