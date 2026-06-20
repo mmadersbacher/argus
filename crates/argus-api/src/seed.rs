@@ -438,4 +438,38 @@ mod tests {
             .any(|v| v.cve_id == "CVE-2019-0708"));
         assert!(scored.risk.value > 0.0);
     }
+
+    #[test]
+    fn nmap_xml_parses_through_to_cve_scoring() {
+        // Canned `nmap -oX -` output for one host running the path-traversal
+        // Apache. This closes the parser→score gap: the nmap parser's product
+        // string must flow into CVE correlation and risk scoring, not just be
+        // unit-tested in isolation.
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap">
+<host>
+<status state="up"/>
+<address addr="203.0.113.80" addrtype="ipv4"/>
+<ports>
+<port protocol="tcp" portid="80"><state state="open"/><service name="http" product="Apache httpd" version="2.4.49"/></port>
+</ports>
+</host>
+</nmaprun>"#;
+        let hosts = argus_discovery::nmap::parse(xml).expect("parse nmap xml");
+        assert_eq!(hosts.len(), 1, "one host parsed");
+        let scored = scored_from_discovered(hosts.into_iter().next().unwrap());
+        // Apache httpd 2.4.49 → CVE-2021-41773, carried from the parsed service.
+        assert!(
+            scored
+                .vulnerabilities
+                .iter()
+                .any(|v| v.cve_id == "CVE-2021-41773"),
+            "the parsed nmap service must correlate to its CVE"
+        );
+        assert!(
+            scored.risk.value > 0.0,
+            "a correlated host must score nonzero risk"
+        );
+    }
 }

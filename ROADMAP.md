@@ -165,9 +165,11 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       score → diff → `commit_asset` (the transaction) → events, plus an
       idempotent re-scan (zero events) and change-on-mutation. Both are hermetic
       (stub services carry no product/CPE, so enrichment short-circuits with no
-      network). The remaining nicety is a parser-level harness wiring canned
-      nmap/masscan output through to scoring — the parsers themselves already
-      have unit tests over their `SAMPLE` fixtures.
+      network). A parser→score harness (`nmap_xml_parses_through_to_cve_scoring`)
+      also drives canned `nmap -oX` output through the parser into CVE
+      correlation (Apache 2.4.49 → CVE-2021-41773) and risk scoring; the masscan
+      parser (a port-sweep precursor to nmap fingerprinting, not a direct
+      scoring input) keeps its own unit tests over `SAMPLE` fixtures.
 - [x] **Frontend data layer**: the five polling hooks are unified behind one
       `usePolledResource<T>` with an in-flight sequence guard, pause-when-hidden
       (refetch on re-show), and `AbortController` cancellation of superseded
