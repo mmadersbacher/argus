@@ -96,17 +96,20 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       operator-verified asset ownership.
       *Done when:* a tenant can inventory an internal network without the
       central API ever connecting to a private address.
-- [~] **Session cookies instead of `localStorage` JWT.** Backend support landed
-      (additive, backward-compatible): login/register set an `HttpOnly` session
-      cookie holding the JWT plus a JS-readable CSRF cookie; the `AuthContext`
-      extractor accepts the cookie and enforces a **double-submit CSRF** check on
-      unsafe methods (cookie-auth only — Bearer/API-key stay exempt and keep
-      working); `/api/auth/logout` clears both; CORS now allows credentials + the
-      `x-csrf-token` header; cookie attributes (`Secure`/`SameSite`) are
-      env-configurable for cross-site HTTPS vs. localhost dev. CSRF is covered by
-      a router-level integration test. Still open to finish the done-criterion:
-      switch the console off `localStorage`/Bearer to the cookie, then drop the
-      token from the login body so no JWT is readable from JS.
+- [x] **Session cookies instead of `localStorage` JWT.** The JWT now lives only
+      in an `HttpOnly` session cookie — never in `localStorage` and never in a
+      response body — so it is unreadable from JS. State-changing requests are
+      guarded by a **double-submit CSRF** token (JS-readable CSRF cookie echoed
+      in `x-csrf-token`), enforced for cookie auth only; Bearer/API-key clients
+      are unaffected and keep working. The console sends `credentials: include`
+      and the CSRF header; `/api/auth/logout` clears the cookies; CORS allows
+      credentials. Cookie `Secure`/`SameSite` are env-configurable (cross-site
+      HTTPS by default; `ARGUS_COOKIE_SECURE=false` + `ARGUS_COOKIE_SAMESITE=Lax`
+      for localhost dev). CSRF is covered by a router-level integration test.
+      *Caveat:* the live cross-origin browser flow was not exercised in a real
+      browser — verify against the deployment's actual origin/HTTPS settings
+      (a genuinely cross-domain console/API would need the CSRF token in the
+      body or a shared cookie domain, since JS can't read a cross-domain cookie).
 - [x] **NVD enrichment concurrency.** The old global gate was held for a
       product's whole paginated fetch, so one slow/large product blocked every
       tenant. Replaced with a per-`vendor:product` single-flight (`OnceCell`)

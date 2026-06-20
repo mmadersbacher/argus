@@ -78,11 +78,11 @@ fn hash_or_500(password: &str) -> Result<String, (StatusCode, String)> {
     })
 }
 
-/// Session payload returned by login and register.
+/// Session payload returned by login and register. The JWT is delivered only
+/// in the `HttpOnly` session cookie, never in this body, so it is never
+/// readable from JavaScript.
 #[derive(Serialize)]
 pub struct SessionResponse {
-    /// Bearer token for subsequent requests.
-    token: String,
     /// Login email.
     email: String,
     /// Access role.
@@ -104,9 +104,7 @@ fn session_response(
     })?;
     // The console authenticates with the HttpOnly session cookie (the JWT is
     // never exposed to JS); the JS-readable CSRF cookie is echoed back on unsafe
-    // requests as a double-submit. Both expire with the JWT. The token is still
-    // returned in the body for the Bearer transition window — removed once the
-    // console has fully moved to cookies.
+    // requests as a double-submit. Both expire with the JWT.
     let max_age = auth::token_ttl_hours() * 3600;
     let set_session = state
         .cookie_cfg
@@ -118,7 +116,6 @@ fn session_response(
     Ok((
         AppendHeaders([(SET_COOKIE, set_session), (SET_COOKIE, set_csrf)]),
         Json(SessionResponse {
-            token,
             email: email.to_owned(),
             role,
             tenant_id,
