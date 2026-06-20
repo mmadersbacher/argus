@@ -478,6 +478,48 @@ impl Store {
     /// count removed. The memory store ignores the age window (it has no
     /// persistence to bound over time) and instead caps each tenant to the
     /// newest [`MAX_MEMORY_EVENTS_PER_TENANT`] events; it returns `0`.
+    /// A tenant's webhook config, if one is set.
+    pub async fn get_webhook(&self, tenant_id: Uuid) -> Result<Option<db::WebhookRow>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::get_webhook(pool, tenant_id).await?),
+            Self::Memory(m) => Ok(m.lock().webhooks.get(&tenant_id).cloned()),
+        }
+    }
+
+    /// Upsert a tenant's webhook config (one per tenant).
+    pub async fn set_webhook(
+        &self,
+        tenant_id: Uuid,
+        url: &str,
+        secret: &str,
+        enabled: bool,
+    ) -> Result<(), StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                Ok(db::set_webhook(pool, tenant_id, url, secret, enabled).await?)
+            }
+            Self::Memory(m) => {
+                m.lock().webhooks.insert(
+                    tenant_id,
+                    db::WebhookRow {
+                        url: url.to_owned(),
+                        secret: secret.to_owned(),
+                        enabled,
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Delete a tenant's webhook; `true` if one existed.
+    pub async fn delete_webhook(&self, tenant_id: Uuid) -> Result<bool, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::delete_webhook(pool, tenant_id).await?),
+            Self::Memory(m) => Ok(m.lock().webhooks.remove(&tenant_id).is_some()),
+        }
+    }
+
     /// Delete login-attempt rows older than the rate-limit window. Postgres
     /// only — the in-memory limiter self-cleans, so this is a no-op there.
     pub async fn prune_login_attempts(&self) -> Result<u64, StoreError> {
@@ -790,6 +832,8 @@ struct MemInner {
     /// Triage decisions keyed like the `finding_status` PK
     /// (`tenant_id, asset_id, cve_id`).
     findings: HashMap<(Uuid, Uuid, String), db::FindingStatusRow>,
+    /// One webhook per tenant, like the `tenant_webhooks` table's PK.
+    webhooks: HashMap<Uuid, db::WebhookRow>,
 }
 
 impl MemInner {
@@ -1331,7 +1375,7 @@ mod tests {
 
         // First ingest: two assets committed via the transaction, one asset.new
         // event each, persisted to Postgres.
-        let (live, changes) = crate::ingest(&store, &locks, &intel, tenant, hosts())
+        let (live, changes) = crate::ingest(&store, &locks, &intel, tenant, hosts(), false)
             .await
             .expect("first ingest");
         assert_eq!(live, 2);
@@ -1346,10 +1390,44 @@ mod tests {
 
         // Re-ingest identical hosts: the diff + dedup run against the committed
         // rows, so no new events and no duplicate assets.
-        let (_l, changes2) = crate::ingest(&store, &locks, &intel, tenant, hosts())
+        let (_l, changes2) = crate::ingest(&store, &locks, &intel, tenant, hosts(), false)
             .await
             .expect("second ingest");
         assert_eq!(changes2, 0, "an unchanged re-scan emits no events");
         assert_eq!(store.load_all(tenant).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pg_webhook_config_upserts_and_deletes() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = pg_tenant(&store).await;
+        assert!(store.get_webhook(tenant).await.unwrap().is_none());
+
+        store
+            .set_webhook(tenant, "https://example.com/h", "sekret", true)
+            .await
+            .unwrap();
+        let cfg = store.get_webhook(tenant).await.unwrap().expect("set");
+        assert_eq!(cfg.url, "https://example.com/h");
+        assert_eq!(cfg.secret, "sekret");
+        assert!(cfg.enabled);
+
+        // Upsert (tenant_id PK): a second set updates in place, never duplicates.
+        store
+            .set_webhook(tenant, "https://example.com/h2", "sekret", false)
+            .await
+            .unwrap();
+        let cfg = store.get_webhook(tenant).await.unwrap().unwrap();
+        assert_eq!(cfg.url, "https://example.com/h2");
+        assert!(!cfg.enabled);
+
+        assert!(store.delete_webhook(tenant).await.unwrap());
+        assert!(store.get_webhook(tenant).await.unwrap().is_none());
+        assert!(
+            !store.delete_webhook(tenant).await.unwrap(),
+            "deleting an absent webhook returns false"
+        );
     }
 }

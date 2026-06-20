@@ -36,6 +36,7 @@ mod report;
 mod seed;
 mod store;
 mod vulns;
+mod webhook;
 
 use argus_vuln::intel::IntelCache;
 use auth::{AuthContext, AuthKeys, LoginLimiter, RateLimiter};
@@ -276,6 +277,10 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/scan", post(run_scan))
         .route("/api/import/nmap", post(import_nmap))
+        .route(
+            "/api/webhook",
+            get(webhook::get).post(webhook::set).delete(webhook::delete),
+        )
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -590,6 +595,7 @@ async fn run_scan(
         &state.intel,
         auth.tenant_id,
         hosts,
+        state.scan_allow_private,
     )
     .await?;
     state
@@ -670,11 +676,15 @@ async fn ingest(
     intel: &IntelCache,
     tenant_id: Uuid,
     hosts: Vec<argus_discovery::DiscoveredHost>,
+    allow_private: bool,
 ) -> Result<(usize, usize), (StatusCode, String)> {
     let _guard = ingest_locks.lock(tenant_id).await;
     let mut scored: Vec<ScoredAsset> = hosts.into_iter().map(scored_from_discovered).collect();
     let n = scored.len();
     let mut changes = 0;
+    // Change events accumulated across the run for one webhook delivery at the
+    // end (cloned: the per-asset `events` borrow is consumed by commit_asset).
+    let mut delivered: Vec<webhook::DeliveredEvent> = Vec::new();
     for asset in &mut scored {
         // Refine classification from vendor + ports + services (argus-intel).
         let cls = argus_intel::classify(&argus_intel::Features {
@@ -727,6 +737,11 @@ async fn ingest(
         let events = monitor::diff(previous.as_ref(), asset);
         let name = monitor::asset_name(asset);
         changes += events.len();
+        delivered.extend(events.iter().map(|e| webhook::DeliveredEvent {
+            kind: e.kind.to_owned(),
+            asset: name.clone(),
+            detail: e.detail.clone(),
+        }));
         let event_refs: Vec<(&str, &serde_json::Value)> =
             events.iter().map(|e| (e.kind, &e.detail)).collect();
         store
@@ -734,6 +749,9 @@ async fn ingest(
             .await
             .map_err(store_error)?;
     }
+    // Deliver the run's change events to the tenant's webhook (if any).
+    // Fire-and-forget: webhook trouble must never fail or delay a scan.
+    webhook::notify(store.clone(), tenant_id, delivered, allow_private);
     Ok((n, changes))
 }
 
@@ -831,6 +849,7 @@ async fn run_scheduled_scan(
             intel,
             claimed.tenant_id,
             discovery.hosts,
+            allow_private,
         )
         .await?;
         // Only emit an audit row when something actually changed — a stable
@@ -902,6 +921,7 @@ async fn import_nmap(
         &state.intel,
         auth.tenant_id,
         hosts,
+        state.scan_allow_private,
     )
     .await?;
     state
@@ -1107,7 +1127,7 @@ mod tests {
         let tenant = Uuid::new_v4();
 
         // First scan: two brand-new assets, one `asset.new` event each.
-        let (live, changes) = ingest(&store, &locks, &intel, tenant, hosts())
+        let (live, changes) = ingest(&store, &locks, &intel, tenant, hosts(), false)
             .await
             .expect("first ingest");
         assert_eq!(live, 2, "both hosts ingested");
@@ -1126,7 +1146,7 @@ mod tests {
         // Re-scan the identical hosts: nothing changed, so the diff emits no
         // events and creates no duplicate assets — the end-to-end proof that
         // classify/enrich/score are deterministic and dedup holds across scans.
-        let (live2, changes2) = ingest(&store, &locks, &intel, tenant, hosts())
+        let (live2, changes2) = ingest(&store, &locks, &intel, tenant, hosts(), false)
             .await
             .expect("second ingest");
         assert_eq!(live2, 2);
@@ -1151,7 +1171,7 @@ mod tests {
             cpe: None,
         });
         mutated[0].open_ports.push(8080);
-        let (_live3, changes3) = ingest(&store, &locks, &intel, tenant, mutated)
+        let (_live3, changes3) = ingest(&store, &locks, &intel, tenant, mutated, false)
             .await
             .expect("third ingest");
         assert!(

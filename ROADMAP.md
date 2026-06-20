@@ -137,8 +137,18 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
 - [ ] **Billing & plans** (`argus-api`): per-tenant plan, asset/seat limits
       enforced on ingest and user/key creation, usage metering. *Done when:* a
       tenant over its asset cap is rejected at ingest with a clear error.
-- [ ] **Scheduled report delivery** (email/webhook) + per-framework compliance
-      mappings on top of `argus-report`.
+- [~] **Scheduled report delivery** (email/webhook). Outbound **webhook**
+      delivery of change events is done: per-tenant config (`/api/webhook`,
+      admin-only), an HMAC-SHA256-signed JSON payload (`x-argus-signature`,
+      keyed on the secret string), and an SSRF-guarded sender that resolves and
+      rejects any private/internal address (reusing the scan guard), **pins** the
+      connection to a validated IP (no DNS rebinding) and disables redirects;
+      `ARGUS_SCAN_ALLOW_PRIVATE` opts self-hosted deployments out. Fired
+      fire-and-forget from `ingest`, so webhook trouble never delays or fails a
+      scan. Verified end-to-end (real-HTTP delivery + valid HMAC + live SSRF
+      rejection of loopback/metadata) and on real Postgres. Still open: email
+      delivery, periodic *report* (vs. change-event) delivery, and per-framework
+      compliance mappings on top of `argus-report`.
 
 ## Quality bar (cross-cutting, do alongside)
 

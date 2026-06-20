@@ -500,6 +500,66 @@ pub async fn prune_login_attempts(pool: &PgPool, window_secs: i64) -> Result<u64
     Ok(result.rows_affected())
 }
 
+/// A tenant's outbound webhook configuration.
+#[derive(Debug, Clone)]
+pub struct WebhookRow {
+    /// Destination URL (http/https).
+    pub url: String,
+    /// HMAC-SHA256 signing secret (verifies `x-argus-signature`).
+    pub secret: String,
+    /// Whether delivery is active.
+    pub enabled: bool,
+}
+
+/// A tenant's webhook config, if one is set.
+pub async fn get_webhook(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> Result<Option<WebhookRow>, sqlx::Error> {
+    let row: Option<(String, String, bool)> =
+        sqlx::query_as("SELECT url, secret, enabled FROM tenant_webhooks WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(url, secret, enabled)| WebhookRow {
+        url,
+        secret,
+        enabled,
+    }))
+}
+
+/// Upsert a tenant's webhook config (one row per tenant).
+pub async fn set_webhook(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    url: &str,
+    secret: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO tenant_webhooks (tenant_id, url, secret, enabled)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret, enabled = EXCLUDED.enabled",
+    )
+    .bind(tenant_id)
+    .bind(url)
+    .bind(secret)
+    .bind(enabled)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete a tenant's webhook; `true` if one existed.
+pub async fn delete_webhook(pool: &PgPool, tenant_id: Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM tenant_webhooks WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// List a tenant's most recent change events, newest first.
 pub async fn list_events(
     pool: &PgPool,
