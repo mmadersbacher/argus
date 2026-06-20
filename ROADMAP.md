@@ -147,14 +147,17 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       `cargo test` is green with no database) cover the `db.rs` path the memory
       backend cannot: FK-backed tenant scoping, the `commit_asset` transaction,
       the atomic monitor claim, and the bulk finding upsert.
-- [~] **Scan-pipeline e2e test**: `ingest()` is now driven end-to-end against
-      the in-memory store (`ingest_persists_classifies_and_is_idempotent`) —
-      classify → enrich → score → diff → upsert → events, plus an idempotent
-      re-scan (zero change events) and change-on-mutation. It is hermetic (stub
-      services carry no product/CPE, so enrichment short-circuits with no
-      network and no Postgres) and runs on every `cargo test`. Still open: the
-      same drive against real Postgres (`TEST_DATABASE_URL`-gated) and a
-      parser-level harness wiring canned nmap/masscan output through to scoring.
+- [x] **Scan-pipeline e2e test**: `ingest()` is driven end-to-end against both
+      the in-memory store (`ingest_persists_classifies_and_is_idempotent`, runs
+      on every `cargo test`) and real Postgres
+      (`pg_ingest_drives_the_full_write_path_and_is_idempotent`, gated on
+      `TEST_DATABASE_URL`, verified against postgres:18) — classify → enrich →
+      score → diff → `commit_asset` (the transaction) → events, plus an
+      idempotent re-scan (zero events) and change-on-mutation. Both are hermetic
+      (stub services carry no product/CPE, so enrichment short-circuits with no
+      network). The remaining nicety is a parser-level harness wiring canned
+      nmap/masscan output through to scoring — the parsers themselves already
+      have unit tests over their `SAMPLE` fixtures.
 - [~] **Frontend data layer**: the five polling hooks are unified behind one
       `usePolledResource<T>` with an in-flight sequence guard, pause-when-hidden
       (refetch on re-show), and now `AbortController` cancellation of superseded

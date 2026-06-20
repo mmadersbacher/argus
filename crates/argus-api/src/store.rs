@@ -1266,4 +1266,90 @@ mod tests {
         let pruned = db::prune_login_attempts(pool, 0).await.unwrap();
         assert!(pruned >= 1, "prune reclaims expired rows");
     }
+
+    #[tokio::test]
+    async fn pg_ingest_drives_the_full_write_path_and_is_idempotent() {
+        use argus_core::{
+            Asset, AssetId, AssetType, Criticality, Exposure, Fingerprint, Interface, Protocol,
+            Service,
+        };
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Hermetic stub hosts: no product/CPE, so enrichment short-circuits with
+        // no network — the test still drives the whole write path through real
+        // Postgres: classify → enrich → score → diff → commit_asset (the
+        // transaction) → events.
+        fn stub(ip: [u8; 4], vendor: &str, ports: &[u16]) -> argus_discovery::DiscoveredHost {
+            argus_discovery::DiscoveredHost {
+                asset: Asset {
+                    id: AssetId::new(),
+                    asset_type: AssetType::It,
+                    criticality: Criticality::Medium,
+                    exposure: Exposure::Internal,
+                    fingerprint: Fingerprint {
+                        vendor: Some(vendor.to_owned()),
+                        ..Fingerprint::default()
+                    },
+                    interfaces: vec![Interface {
+                        mac: None,
+                        ip: Some(IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]))),
+                        vlan: None,
+                        hostname: None,
+                    }],
+                    first_seen: OffsetDateTime::UNIX_EPOCH,
+                    last_seen: OffsetDateTime::UNIX_EPOCH,
+                },
+                services: ports
+                    .iter()
+                    .map(|&port| Service {
+                        port,
+                        protocol: Protocol::Tcp,
+                        product: None,
+                        banner: None,
+                        cpe: None,
+                    })
+                    .collect(),
+                open_ports: ports.to_vec(),
+                insecure_score: 0.0,
+            }
+        }
+
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = pg_tenant(&store).await;
+        // Tenant isolation keeps fixed IPs from colliding with other runs.
+        let hosts = || {
+            vec![
+                stub([10, 0, 0, 50], "Hikvision", &[554]),
+                stub([10, 0, 0, 51], "Dell Inc.", &[445]),
+            ]
+        };
+
+        let locks = IngestLocks::default();
+        let intel = argus_vuln::intel::IntelCache::new(None);
+
+        // First ingest: two assets committed via the transaction, one asset.new
+        // event each, persisted to Postgres.
+        let (live, changes) = crate::ingest(&store, &locks, &intel, tenant, hosts())
+            .await
+            .expect("first ingest");
+        assert_eq!(live, 2);
+        assert!(changes >= 2);
+        assert_eq!(store.load_all(tenant).await.unwrap().len(), 2);
+        let events = store.list_events(tenant, 100).await.unwrap();
+        assert_eq!(
+            events.iter().filter(|e| e.kind == "asset.new").count(),
+            2,
+            "one asset.new per host, persisted"
+        );
+
+        // Re-ingest identical hosts: the diff + dedup run against the committed
+        // rows, so no new events and no duplicate assets.
+        let (_l, changes2) = crate::ingest(&store, &locks, &intel, tenant, hosts())
+            .await
+            .expect("second ingest");
+        assert_eq!(changes2, 0, "an unchanged re-scan emits no events");
+        assert_eq!(store.load_all(tenant).await.unwrap().len(), 2);
+    }
 }
