@@ -637,6 +637,84 @@ fn is_dns_name(s: &str) -> bool {
     !s.is_empty() && s.contains('.') && !s.starts_with('*') && s.parse::<IpAddr>().is_err()
 }
 
+/// Union a fresh scan round into an accumulating inventory, keyed by IP.
+///
+/// A device seen in any round persists; per device, open ports and services are
+/// unioned and any newly-learned fingerprint field (vendor/model/os/device_type),
+/// hostname or MAC is kept. This is how a stateless multi-round scan beats
+/// power-saving Wi-Fi, where a single sweep misses devices that are briefly
+/// asleep — run a few rounds and the union holds every device that woke for any
+/// one of them. Re-run [`fusion::fuse_hosts`] on the result to reclassify from the
+/// unioned signals.
+pub fn accumulate(into: &mut Vec<DiscoveredHost>, round: Vec<DiscoveredHost>) {
+    for host in round {
+        let ip = host.asset.interfaces.first().and_then(|i| i.ip);
+        let existing = ip.and_then(|ip| {
+            into.iter_mut()
+                .find(|h| h.asset.interfaces.iter().any(|i| i.ip == Some(ip)))
+        });
+        match existing {
+            Some(existing) => merge_round_host(existing, host),
+            None => into.push(host),
+        }
+    }
+}
+
+/// Fold a later observation of the same host into the accumulated one.
+fn merge_round_host(existing: &mut DiscoveredHost, new: DiscoveredHost) {
+    for svc in new.services {
+        if let Some(cur) = existing
+            .services
+            .iter_mut()
+            .find(|s| s.port == svc.port && s.protocol == svc.protocol)
+        {
+            if cur.banner.is_none() {
+                cur.banner = svc.banner;
+            }
+            if cur.product.is_none() {
+                cur.product = svc.product;
+            }
+        } else {
+            existing.services.push(svc);
+        }
+    }
+    for port in new.open_ports {
+        if !existing.open_ports.contains(&port) {
+            existing.open_ports.push(port);
+        }
+    }
+    existing.open_ports.sort_unstable();
+
+    let (ef, nf) = (&mut existing.asset.fingerprint, new.asset.fingerprint);
+    if ef.vendor.is_none() {
+        ef.vendor = nf.vendor;
+    }
+    if ef.model.is_none() {
+        ef.model = nf.model;
+    }
+    if ef.os.is_none() {
+        ef.os = nf.os;
+    }
+    if ef.device_type.is_none() {
+        ef.device_type = nf.device_type;
+    }
+    if existing.asset.asset_type == AssetType::Unknown {
+        existing.asset.asset_type = new.asset.asset_type;
+    }
+    if let (Some(e), Some(n)) = (
+        existing.asset.interfaces.first_mut(),
+        new.asset.interfaces.first(),
+    ) {
+        if e.hostname.is_none() {
+            e.hostname.clone_from(&n.hostname);
+        }
+        if e.mac.is_none() {
+            e.mac = n.mac;
+        }
+    }
+    existing.asset.last_seen = new.asset.last_seen;
+}
+
 /// Probe each host with an open IPP port (631) for printer make/model/state —
 /// the exact identity a port-class "printer" guess cannot give.
 async fn ipp_enrich(hosts: &mut [DiscoveredHost]) {
@@ -1160,5 +1238,36 @@ mod tests {
         let mut hosts: Vec<DiscoveredHost> = Vec::new();
         enrich_macs(&mut hosts);
         assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn accumulate_unions_ports_and_persists_devices() {
+        let ip = |n| IpAddr::V4(Ipv4Addr::new(192, 168, 8, n));
+        let svc = |port| Service {
+            port,
+            protocol: Protocol::Tcp,
+            product: None,
+            banner: None,
+            cpe: None,
+        };
+
+        let mut first = base_host(ip(50));
+        first.open_ports = vec![80];
+        first.services.push(svc(80));
+        let mut acc = vec![first];
+
+        // A later round: the same device now answers on 443, and a device that
+        // was asleep in round one (.51) shows up.
+        let mut same = base_host(ip(50));
+        same.open_ports = vec![443];
+        same.services.push(svc(443));
+        accumulate(&mut acc, vec![same, base_host(ip(51))]);
+
+        assert_eq!(acc.len(), 2, "the device asleep in round one now persists");
+        let dev = acc
+            .iter()
+            .find(|h| h.asset.interfaces[0].ip == Some(ip(50)))
+            .expect("device .50 present");
+        assert_eq!(dev.open_ports, vec![80, 443], "ports unioned across rounds");
     }
 }
