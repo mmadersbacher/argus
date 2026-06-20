@@ -329,6 +329,10 @@ mod tests {
             scan_allow_private: true,
             ingest_locks: IngestLocks::default(),
             intel: argus_vuln::intel::IntelCache::new(None),
+            cookie_cfg: crate::cookies::CookieConfig {
+                secure: true,
+                same_site: crate::cookies::SameSite::None,
+            },
         }
     }
 

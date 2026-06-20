@@ -96,11 +96,17 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       operator-verified asset ownership.
       *Done when:* a tenant can inventory an internal network without the
       central API ever connecting to a private address.
-- [ ] **Session cookies instead of `localStorage` JWT.** Move the bearer token
-      to a `HttpOnly; Secure; SameSite` cookie with CSRF double-submit (the
-      console and API are cross-origin, so this needs `SameSite=None` + an
-      anti-CSRF token). *Done when:* no JWT is readable from JS and CSRF is
-      covered by a test.
+- [~] **Session cookies instead of `localStorage` JWT.** Backend support landed
+      (additive, backward-compatible): login/register set an `HttpOnly` session
+      cookie holding the JWT plus a JS-readable CSRF cookie; the `AuthContext`
+      extractor accepts the cookie and enforces a **double-submit CSRF** check on
+      unsafe methods (cookie-auth only — Bearer/API-key stay exempt and keep
+      working); `/api/auth/logout` clears both; CORS now allows credentials + the
+      `x-csrf-token` header; cookie attributes (`Secure`/`SameSite`) are
+      env-configurable for cross-site HTTPS vs. localhost dev. CSRF is covered by
+      a router-level integration test. Still open to finish the done-criterion:
+      switch the console off `localStorage`/Bearer to the cookie, then drop the
+      token from the login body so no JWT is readable from JS.
 - [x] **NVD enrichment concurrency.** The old global gate was held for a
       product's whole paginated fetch, so one slow/large product blocked every
       tenant. Replaced with a per-`vendor:product` single-flight (`OnceCell`)

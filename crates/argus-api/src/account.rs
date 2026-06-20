@@ -5,13 +5,15 @@ use std::net::SocketAddr;
 
 use argus_core::tenant::Role;
 use axum::extract::{ConnectInfo, Path, State};
+use axum::http::header::SET_COOKIE;
 use axum::http::StatusCode;
+use axum::response::{AppendHeaders, IntoResponse};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{self, AuthContext, LoginLimiter};
-use crate::{db, store_error, AppState};
+use crate::{cookies, db, store_error, AppState};
 
 const MIN_PASSWORD_LEN: usize = 10;
 
@@ -95,17 +97,46 @@ fn session_response(
     tenant_id: Uuid,
     role: Role,
     email: &str,
-) -> Result<Json<SessionResponse>, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let token = auth::issue_token(&state.keys, user_id, tenant_id, role, email).map_err(|err| {
         tracing::error!(error = %err, "token issuance failed");
         (StatusCode::INTERNAL_SERVER_ERROR, "token error".to_owned())
     })?;
-    Ok(Json(SessionResponse {
-        token,
-        email: email.to_owned(),
-        role,
-        tenant_id,
-    }))
+    // The console authenticates with the HttpOnly session cookie (the JWT is
+    // never exposed to JS); the JS-readable CSRF cookie is echoed back on unsafe
+    // requests as a double-submit. Both expire with the JWT. The token is still
+    // returned in the body for the Bearer transition window — removed once the
+    // console has fully moved to cookies.
+    let max_age = auth::token_ttl_hours() * 3600;
+    let set_session = state
+        .cookie_cfg
+        .set(cookies::SESSION_COOKIE, &token, max_age, true);
+    let set_csrf =
+        state
+            .cookie_cfg
+            .set(cookies::CSRF_COOKIE, &cookies::new_csrf_token(), max_age, false);
+    Ok((
+        AppendHeaders([(SET_COOKIE, set_session), (SET_COOKIE, set_csrf)]),
+        Json(SessionResponse {
+            token,
+            email: email.to_owned(),
+            role,
+            tenant_id,
+        }),
+    ))
+}
+
+/// `POST /api/auth/logout` — clear the session and CSRF cookies.
+///
+/// Deliberately unauthenticated and CSRF-exempt: clearing one's own cookies has
+/// no security impact, and logout must work even after the session has expired.
+pub async fn logout(State(state): State<AppState>) -> impl IntoResponse {
+    let clear_session = state.cookie_cfg.clear(cookies::SESSION_COOKIE, true);
+    let clear_csrf = state.cookie_cfg.clear(cookies::CSRF_COOKIE, false);
+    (
+        AppendHeaders([(SET_COOKIE, clear_session), (SET_COOKIE, clear_csrf)]),
+        StatusCode::NO_CONTENT,
+    )
 }
 
 /// `POST /api/auth/register` — self-service tenant signup.
@@ -124,7 +155,7 @@ pub async fn register(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
-) -> Result<Json<SessionResponse>, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     if !state.signup_enabled {
         return Err((
             StatusCode::FORBIDDEN,
@@ -213,7 +244,7 @@ pub async fn login(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<SessionResponse>, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let email = req.email.trim().to_lowercase();
     // Two rate-limit dimensions: a loose per-IP budget (caps spraying across
     // many accounts) and a tight per-(ip,email) budget (stops targeted brute

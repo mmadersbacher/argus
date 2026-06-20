@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 mod account;
 mod auth;
+mod cookies;
 mod db;
 mod findings;
 mod graph;
@@ -61,6 +62,8 @@ pub struct AppState {
     pub ingest_locks: IngestLocks,
     /// Cached live vulnerability intelligence (NVD / CISA KEV / EPSS).
     pub intel: IntelCache,
+    /// Session/CSRF cookie security attributes (resolved from the environment).
+    pub cookie_cfg: cookies::CookieConfig,
 }
 
 #[tokio::main]
@@ -91,6 +94,7 @@ async fn main() {
         scan_allow_private,
         ingest_locks: ingest_locks.clone(),
         intel: intel.clone(),
+        cookie_cfg: cookies::CookieConfig::from_env(),
     };
 
     spawn_scheduler(state.store.clone(), ingest_locks, intel, scan_allow_private);
@@ -114,7 +118,7 @@ async fn main() {
 /// Read a boolean env flag. An unset OR empty/whitespace value falls back to
 /// `default` (fail-safe: e.g. `ARGUS_SIGNUP_ENABLED=` does not silently enable
 /// signup); otherwise "false"/"0"/"no" disable, anything else enables.
-fn env_flag(name: &str, default: bool) -> bool {
+pub(crate) fn env_flag(name: &str, default: bool) -> bool {
     match std::env::var(name) {
         Ok(v) if !v.trim().is_empty() => {
             !matches!(v.trim().to_lowercase().as_str(), "false" | "0" | "no")
@@ -219,11 +223,16 @@ fn cors_layer() -> CorsLayer {
     }
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(list))
+        // Cookies are credentials: the browser only sends them, and only
+        // exposes the response, when the server opts in. Requires a concrete
+        // origin allow-list (never `*`), which is the case above.
+        .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             HeaderName::from_static(auth::API_KEY_HEADER),
+            HeaderName::from_static(cookies::CSRF_HEADER),
         ])
 }
 
@@ -233,6 +242,7 @@ fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/auth/register", post(account::register))
         .route("/api/auth/login", post(account::login))
+        .route("/api/auth/logout", post(account::logout))
         .route("/api/auth/me", get(account::me))
         .route(
             "/api/users",
@@ -1130,6 +1140,132 @@ mod tests {
             store.load_all(tenant).await.unwrap().len(),
             2,
             "mutating a host must not create a new asset"
+        );
+    }
+
+    /// End-to-end proof of the cookie session + double-submit CSRF gate, driven
+    /// through the real router. A 403 means the CSRF gate rejected the request
+    /// before the handler; a 404 means it passed the gate and reached the
+    /// handler (an Admin-only DELETE against a non-existent key).
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // five sequential request/assert cases read better inline
+    async fn cookie_session_enforces_csrf_on_unsafe_methods() {
+        use tower::ServiceExt; // oneshot
+
+        let keys = AuthKeys::from_secret(b"integration-secret-integration-secret");
+        let tenant = Uuid::new_v4();
+        let token = crate::auth::issue_token(&keys, Uuid::new_v4(), tenant, Role::Admin, "a@b.co")
+            .expect("issue token");
+        let csrf = "test-csrf-token";
+
+        let state = AppState {
+            store: Store::memory(),
+            keys,
+            limiter: Arc::new(LoginLimiter::default()),
+            signup_enabled: false,
+            scan_allow_private: true,
+            ingest_locks: IngestLocks::default(),
+            intel: IntelCache::new(None),
+            cookie_cfg: crate::cookies::CookieConfig {
+                secure: true,
+                same_site: crate::cookies::SameSite::None,
+            },
+        };
+        let app = router(state);
+        let cookie = format!(
+            "{}={token}; {}={csrf}",
+            crate::cookies::SESSION_COOKIE,
+            crate::cookies::CSRF_COOKIE
+        );
+        let key_path = format!("/api/api-keys/{}", Uuid::new_v4());
+
+        let status = |req: axum::http::Request<axum::body::Body>| {
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        let req = || axum::http::Request::builder();
+
+        // Safe method via cookie: no CSRF needed, reaches the handler (200).
+        let safe = status(
+            req()
+                .method("GET")
+                .uri("/api/summary")
+                .header(axum::http::header::COOKIE, &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(safe, StatusCode::OK, "safe cookie request is allowed");
+
+        // Unsafe method via cookie WITHOUT the CSRF header → 403 (gate).
+        let no_header = status(
+            req()
+                .method("DELETE")
+                .uri(&key_path)
+                .header(axum::http::header::COOKIE, &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            no_header,
+            StatusCode::FORBIDDEN,
+            "cookie DELETE without a CSRF header is rejected"
+        );
+
+        // Unsafe method via cookie with a WRONG CSRF header → still 403.
+        let bad_header = status(
+            req()
+                .method("DELETE")
+                .uri(&key_path)
+                .header(axum::http::header::COOKIE, &cookie)
+                .header(crate::cookies::CSRF_HEADER, "wrong")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            bad_header,
+            StatusCode::FORBIDDEN,
+            "a mismatched CSRF token is rejected"
+        );
+
+        // Unsafe method via cookie WITH the matching CSRF header → passes the
+        // gate, reaches the handler (404: the key doesn't exist).
+        let good_header = status(
+            req()
+                .method("DELETE")
+                .uri(&key_path)
+                .header(axum::http::header::COOKIE, &cookie)
+                .header(crate::cookies::CSRF_HEADER, csrf)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            good_header,
+            StatusCode::NOT_FOUND,
+            "a matching CSRF token passes the gate"
+        );
+
+        // Bearer auth is CSRF-exempt (a cross-site page can't attach the header):
+        // an unsafe Bearer request reaches the handler (404) with no CSRF token.
+        let bearer = status(
+            req()
+                .method("DELETE")
+                .uri(&key_path)
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token}"),
+                )
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            bearer,
+            StatusCode::NOT_FOUND,
+            "bearer auth needs no CSRF token"
         );
     }
 }

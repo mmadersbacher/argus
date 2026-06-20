@@ -86,6 +86,18 @@ pub struct Claims {
     pub iat: i64,
 }
 
+/// Session lifetime in hours from `ARGUS_TOKEN_TTL_HOURS` (clamped to
+/// `1..=168`, default 12). Shared by the JWT expiry and the session cookie's
+/// `Max-Age` so the two never drift apart.
+#[must_use]
+pub fn token_ttl_hours() -> i64 {
+    std::env::var("ARGUS_TOKEN_TTL_HOURS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|h| (1..=168).contains(h))
+        .unwrap_or(DEFAULT_TOKEN_TTL_HOURS)
+}
+
 /// Issue a signed session token for the given user.
 pub fn issue_token(
     keys: &AuthKeys,
@@ -94,11 +106,7 @@ pub fn issue_token(
     role: Role,
     email: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
-    let ttl_hours = std::env::var("ARGUS_TOKEN_TTL_HOURS")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok())
-        .filter(|h| (1..=168).contains(h))
-        .unwrap_or(DEFAULT_TOKEN_TTL_HOURS);
+    let ttl_hours = token_ttl_hours();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let claims = Claims {
         sub: user_id,
@@ -208,9 +216,10 @@ impl LoginLimiter {
 
 /// Authenticated request context: who is calling, for which tenant, as what.
 ///
-/// Extracted from either a `Authorization: Bearer <jwt>` session or an
-/// `x-api-key` machine credential. Every `/api/*` handler takes this, which
-/// makes tenant scoping impossible to forget.
+/// Extracted, in order, from an `x-api-key` machine credential, an `HttpOnly`
+/// session cookie (the browser console — CSRF-protected on unsafe methods), or
+/// an `Authorization: Bearer <jwt>` session (programmatic clients). Every
+/// `/api/*` handler takes this, which makes tenant scoping impossible to forget.
 #[derive(Debug, Clone)]
 pub struct AuthContext {
     /// Tenant all queries must be scoped to.
@@ -265,6 +274,33 @@ where
                 user_id: None,
                 email: None,
                 role: found.role,
+            });
+        }
+
+        // Browser session: JWT in an HttpOnly cookie. Because the browser sends
+        // it ambiently, every unsafe method must also echo the CSRF cookie in
+        // the x-csrf-token header (double-submit). A present-but-invalid cookie
+        // is rejected outright rather than falling through to the Bearer path.
+        if let Some(token) = crate::cookies::read_cookie(&parts.headers, crate::cookies::SESSION_COOKIE)
+        {
+            let claims = verify_token(&state.keys, &token)
+                .map_err(|_| unauthorized("invalid or expired session"))?;
+            let csrf_cookie = crate::cookies::read_cookie(&parts.headers, crate::cookies::CSRF_COOKIE);
+            let csrf_header = parts
+                .headers
+                .get(crate::cookies::CSRF_HEADER)
+                .and_then(|v| v.to_str().ok());
+            if !crate::cookies::csrf_ok(&parts.method, csrf_cookie.as_deref(), csrf_header) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "CSRF token missing or invalid".to_owned(),
+                ));
+            }
+            return Ok(Self {
+                tenant_id: claims.tid,
+                user_id: Some(claims.sub),
+                email: Some(claims.email),
+                role: claims.role,
             });
         }
 
