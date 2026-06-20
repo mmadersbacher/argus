@@ -13,6 +13,7 @@ pub mod fingerprint;
 pub mod fusion;
 pub mod masscan;
 pub mod mdns;
+pub mod netbios;
 pub mod nmap;
 pub mod oui;
 pub mod portscan;
@@ -24,7 +25,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use argus_core::{Asset, AssetId, Criticality, Exposure, Interface, Protocol, Service};
+use argus_core::{Asset, AssetId, Criticality, Exposure, Interface, MacAddr, Protocol, Service};
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
@@ -192,6 +193,7 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     let found = mdns::discover(Duration::from_millis(2500)).await;
     let set: HashSet<IpAddr> = scope.iter().copied().collect();
     merge_mdns(hosts, found, &set);
+    netbios_probe(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
 }
@@ -357,39 +359,69 @@ fn base_host(ip: IpAddr) -> DiscoveredHost {
     }
 }
 
-/// Enrich discovered hosts with a MAC address (from the kernel ARP cache) and a
-/// vendor (OUI lookup) for any interface that has an IP but no MAC yet.
+/// Fill each host's MAC and resolve its OUI vendor.
 ///
-/// Works for hosts on the local subnet that were just contacted; loopback and
-/// remote hosts have no ARP entry and are left unchanged.
+/// MACs come from the kernel ARP cache (where missing) or from another probe
+/// that already supplied one (e.g. NetBIOS, which carries the MAC in its payload
+/// and so survives a NAT the ARP cache does not). The vendor is looked up from
+/// whatever MAC the host ends up with.
 pub fn enrich_macs(hosts: &mut [DiscoveredHost]) {
     if hosts.is_empty() {
         return;
     }
     let arp = arp::read_arp_table();
-    if arp.is_empty() {
-        return;
-    }
     let oui = oui::OuiDb::load();
 
     for host in hosts.iter_mut() {
-        let mut found_vendor: Option<String> = None;
         for iface in &mut host.asset.interfaces {
-            if iface.mac.is_some() {
-                continue;
-            }
-            let Some(ip) = iface.ip else { continue };
-            if let Some(&mac) = arp.get(&ip) {
-                iface.mac = Some(mac);
-                if found_vendor.is_none() {
-                    found_vendor = oui.vendor(mac).map(str::to_owned);
+            if iface.mac.is_none() {
+                if let Some(ip) = iface.ip {
+                    if let Some(&mac) = arp.get(&ip) {
+                        iface.mac = Some(mac);
+                    }
                 }
             }
         }
         if host.asset.fingerprint.vendor.is_none() {
-            if let Some(vendor) = found_vendor {
-                host.asset.fingerprint.vendor = Some(vendor);
+            if let Some(mac) = host.asset.interfaces.iter().find_map(|i| i.mac) {
+                if let Some(vendor) = oui.vendor(mac) {
+                    host.asset.fingerprint.vendor = Some(vendor.to_owned());
+                }
             }
+        }
+    }
+}
+
+/// Probe each host's NetBIOS node status (UDP 137), folding name + MAC back in.
+async fn netbios_probe(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let targets: Vec<(usize, IpAddr)> = hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            h.asset
+                .interfaces
+                .first()
+                .and_then(|f| f.ip)
+                .map(|ip| (i, ip))
+        })
+        .collect();
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, netbios::query(ip, Duration::from_millis(800)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(res))) = joined else {
+            continue;
+        };
+        let Some(iface) = hosts[idx].asset.interfaces.first_mut() else {
+            continue;
+        };
+        if let Some(name) = res.name {
+            iface.hostname.get_or_insert(name);
+        }
+        if let Some(mac) = res.mac {
+            iface.mac.get_or_insert(MacAddr(mac));
         }
     }
 }

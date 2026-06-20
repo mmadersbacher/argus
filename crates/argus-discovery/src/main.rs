@@ -5,7 +5,7 @@
 
 use std::process::ExitCode;
 
-use argus_discovery::{expand, scan, ScanOptions};
+use argus_discovery::{enrich, expand, scan, ScanOptions};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -22,22 +22,18 @@ async fn main() -> ExitCode {
     };
 
     eprintln!("scanning {} host(s) from '{target}' …", hosts.len());
-    let report = scan(
-        &hosts,
-        &ScanOptions {
-            mdns: true,
-            ..ScanOptions::default()
-        },
-    )
-    .await;
+    let report = scan(&hosts, &ScanOptions::default()).await;
+    // Full enrichment pass (mDNS + NetBIOS + MAC/OUI + fusion), like the API.
+    let mut live = report.live;
+    enrich(&mut live, &hosts).await;
 
     println!(
         "scanned {} host(s) in {} ms — {} live",
         report.hosts_scanned,
         report.duration_ms,
-        report.live.len()
+        live.len()
     );
-    for host in &report.live {
+    for host in &live {
         let iface = host.asset.interfaces.first();
         let ip = iface
             .and_then(|i| i.ip)
