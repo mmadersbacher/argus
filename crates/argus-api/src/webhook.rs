@@ -210,36 +210,60 @@ const fn default_enabled() -> bool {
     true
 }
 
-/// Webhook configuration response. The `secret` is the tenant's own signing
-/// key (shared with the receiver to verify signatures), so it is returned to
-/// the tenant admin rather than shown only once.
+/// Webhook configuration as returned to the admin. `configured: false` (rather
+/// than a 404) mirrors the monitor-config shape so the console renders an empty
+/// form cleanly. The `secret` is the tenant's own signing key (shared with the
+/// receiver to verify signatures), so it is returned rather than shown once.
 #[derive(Serialize)]
-pub struct WebhookResponse {
-    /// Destination URL.
-    url: String,
-    /// Whether delivery is active.
-    enabled: bool,
-    /// HMAC-SHA256 signing secret.
-    secret: String,
+pub struct WebhookConfig {
+    /// Whether a webhook is set.
+    configured: bool,
+    /// Destination URL (present when configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    /// Whether delivery is active (present when configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    /// HMAC-SHA256 signing secret (present when configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret: Option<String>,
 }
 
-/// `GET /api/webhook` — the tenant's webhook config (admin only).
+impl WebhookConfig {
+    fn from_row(row: crate::db::WebhookRow) -> Self {
+        Self {
+            configured: true,
+            url: Some(row.url),
+            enabled: Some(row.enabled),
+            secret: Some(row.secret),
+        }
+    }
+
+    const fn none() -> Self {
+        Self {
+            configured: false,
+            url: None,
+            enabled: None,
+            secret: None,
+        }
+    }
+}
+
+/// `GET /api/webhook` — the tenant's webhook config (admin only);
+/// `{ "configured": false }` when none is set.
 pub async fn get(
     auth: AuthContext,
     State(state): State<AppState>,
-) -> Result<Json<WebhookResponse>, (StatusCode, String)> {
+) -> Result<Json<WebhookConfig>, (StatusCode, String)> {
     auth.require(Role::Admin)?;
     let cfg = state
         .store
         .get_webhook(auth.tenant_id)
         .await
-        .map_err(store_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "no webhook configured".to_owned()))?;
-    Ok(Json(WebhookResponse {
-        url: cfg.url,
-        enabled: cfg.enabled,
-        secret: cfg.secret,
-    }))
+        .map_err(store_error)?;
+    Ok(Json(
+        cfg.map_or_else(WebhookConfig::none, WebhookConfig::from_row),
+    ))
 }
 
 /// `POST /api/webhook` — set/update the tenant's webhook (admin only). The URL
@@ -249,7 +273,7 @@ pub async fn set(
     auth: AuthContext,
     State(state): State<AppState>,
     Json(req): Json<WebhookRequest>,
-) -> Result<Json<WebhookResponse>, (StatusCode, String)> {
+) -> Result<Json<WebhookConfig>, (StatusCode, String)> {
     auth.require(Role::Admin)?;
     let url = req.url.trim();
     validated_target(url, state.scan_allow_private)
@@ -278,10 +302,11 @@ pub async fn set(
             serde_json::json!({ "url": url, "enabled": req.enabled }),
         )
         .await;
-    Ok(Json(WebhookResponse {
-        url: url.to_owned(),
-        enabled: req.enabled,
-        secret,
+    Ok(Json(WebhookConfig {
+        configured: true,
+        url: Some(url.to_owned()),
+        enabled: Some(req.enabled),
+        secret: Some(secret),
     }))
 }
 

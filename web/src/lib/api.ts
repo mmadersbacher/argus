@@ -349,6 +349,31 @@ export type MonitorConfig =
 
 export const fetchMonitor = () => fetchJSON<MonitorConfig>("/api/monitor");
 
+// ---- webhook ----------------------------------------------------------------
+
+/** Outbound webhook config. `configured: false` mirrors the monitor shape. */
+export type WebhookConfig =
+  | { configured: false }
+  | {
+      configured: true;
+      url: string;
+      enabled: boolean;
+      /** HMAC-SHA256 signing secret (the receiver verifies x-argus-signature). */
+      secret: string;
+    };
+
+export const fetchWebhook = () => fetchJSON<WebhookConfig>("/api/webhook");
+
+export const saveWebhook = (url: string, enabled: boolean) =>
+  fetchJSON<WebhookConfig>("/api/webhook", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url, enabled }),
+  });
+
+export const deleteWebhook = () =>
+  fetchJSON<void>("/api/webhook", { method: "DELETE" });
+
 // ---- vulnerabilities --------------------------------------------------------
 
 export type FindingStatus =

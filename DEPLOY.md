@@ -104,7 +104,7 @@ scan. Admin-only:
 
 - `POST /api/webhook` `{ "url": "https://…", "enabled": true }` — set/update;
   returns the signing `secret`.
-- `GET /api/webhook` — current config (includes the secret).
+- `GET /api/webhook` — current config (`{ configured, url?, enabled?, secret? }`).
 - `DELETE /api/webhook` — remove it.
 
 Deliveries are `POST`ed as JSON and signed with **HMAC-SHA256** over the raw

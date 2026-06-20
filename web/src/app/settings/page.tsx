@@ -10,14 +10,18 @@ import {
   createApiKey,
   createUser,
   deleteApiKey,
+  deleteWebhook,
   fetchMonitor,
+  fetchWebhook,
   listApiKeys,
   listUsers,
   saveMonitor,
+  saveWebhook,
   type ApiKeySummary,
   type MonitorConfig,
   type Role,
   type UserSummary,
+  type WebhookConfig,
 } from "@/lib/api";
 import {
   Badge,
@@ -262,6 +266,158 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+function WebhookPanel() {
+  const [url, setUrl] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [configured, setConfigured] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const mounted = useRef(true);
+  // Same monotonic request-id guard as MonitoringPanel: a slow mount GET must
+  // never overwrite a freshly-saved value or current input.
+  const seq = useRef(0);
+  const adoptedSeq = useRef(-1);
+
+  const adopt = useCallback((cfg: WebhookConfig, requestSeq: number) => {
+    if (!mounted.current || requestSeq < adoptedSeq.current) return;
+    adoptedSeq.current = requestSeq;
+    setConfigured(cfg.configured);
+    if (cfg.configured) {
+      setUrl(cfg.url);
+      setEnabled(cfg.enabled);
+      setSecret(cfg.secret);
+    } else {
+      setSecret(null);
+    }
+  }, []);
+
+  const reload = useCallback(async () => {
+    const requestSeq = ++seq.current;
+    try {
+      adopt(await fetchWebhook(), requestSeq);
+      if (mounted.current) setError(null);
+    } catch (e) {
+      if (mounted.current) {
+        setError(e instanceof Error ? e.message : "failed to load webhook config");
+      }
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [adopt]);
+
+  useEffect(() => {
+    mounted.current = true;
+    void reload();
+    return () => {
+      mounted.current = false;
+    };
+  }, [reload]);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const requestSeq = ++seq.current;
+    setBusy(true);
+    setSaved(false);
+    try {
+      adopt(await saveWebhook(url.trim(), enabled), requestSeq);
+      if (mounted.current) {
+        setError(null);
+        setSaved(true);
+      }
+    } catch (err) {
+      if (mounted.current) {
+        setError(err instanceof Error ? err.message : "failed to save webhook");
+      }
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    const requestSeq = ++seq.current;
+    setBusy(true);
+    setSaved(false);
+    try {
+      await deleteWebhook();
+      adopt({ configured: false }, requestSeq);
+      if (mounted.current) {
+        setUrl("");
+        setEnabled(true);
+        setError(null);
+      }
+    } catch (err) {
+      if (mounted.current) {
+        setError(err instanceof Error ? err.message : "failed to delete webhook");
+      }
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  return (
+    <Panel
+      title="Webhook"
+      description="POST change events to a URL after each scan, HMAC-SHA256-signed (x-argus-signature). Must be a public http(s) endpoint."
+    >
+      <form onSubmit={save} className="space-y-4">
+        {error && <FormError>{error}</FormError>}
+
+        <Toggle
+          checked={enabled}
+          onChange={setEnabled}
+          disabled={loading}
+          label="Enable delivery"
+        />
+
+        <Field label="Endpoint URL">
+          <Input
+            className="font-mono"
+            type="url"
+            placeholder="https://example.com/hooks/argus"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={loading}
+            aria-label="Webhook URL"
+            required
+          />
+        </Field>
+
+        {secret && (
+          <Field label="Signing secret (verify x-argus-signature with this)">
+            <Input
+              className="font-mono"
+              value={secret}
+              readOnly
+              aria-label="Webhook signing secret"
+            />
+          </Field>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" disabled={busy || loading}>
+            Save
+          </Button>
+          {configured && (
+            <Button
+              type="button"
+              variant="danger"
+              disabled={busy || loading}
+              onClick={() => void remove()}
+            >
+              Remove
+            </Button>
+          )}
+          {saved && <span className="text-xs font-medium text-ok">Saved.</span>}
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
 export default function Page() {
   const { session } = useAuth();
   const isAdmin = session?.role === "admin";
@@ -390,6 +546,8 @@ export default function Page() {
         ) : (
           <>
             {error && <FormError>{error}</FormError>}
+
+            <WebhookPanel />
 
             <Panel
               title="Users"
