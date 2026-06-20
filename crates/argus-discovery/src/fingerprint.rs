@@ -128,7 +128,9 @@ pub fn classify(open: &[u16]) -> (AssetType, Fingerprint) {
             device_type: Some(device_type.to_owned()),
             vendor: None,
             os: os.map(str::to_owned),
+            model: None,
             confidence,
+            evidence: Vec::new(),
         },
     )
 }

@@ -66,8 +66,15 @@ pub struct Fingerprint {
     pub vendor: Option<String>,
     /// Operating system, if detected.
     pub os: Option<String>,
+    /// Model / hardware identifier (e.g. `Raspberry Pi 4`, `HP LaserJet M404`).
+    #[serde(default)]
+    pub model: Option<String>,
     /// Classifier confidence, `0..=100`.
     pub confidence: u8,
+    /// Signals that contributed to this fingerprint, for explainability
+    /// (e.g. `["oui:Raspberry Pi", "mdns:raspberrypi.local", "rdns:pi.lan"]`).
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 
 /// A single real-world device, deduplicated across all data sources.

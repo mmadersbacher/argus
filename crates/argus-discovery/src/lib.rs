@@ -10,6 +10,7 @@
 pub mod arp;
 pub mod banner;
 pub mod fingerprint;
+pub mod fusion;
 pub mod masscan;
 pub mod nmap;
 pub mod oui;
@@ -124,6 +125,7 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
         }
     }
     enrich_macs(&mut live);
+    fusion::fuse_hosts(&mut live);
 
     ScanReport {
         hosts_scanned: targets.len(),
@@ -160,9 +162,12 @@ pub async fn deep_scan(
         .map(|h| h.ip.to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    nmap::scan_os(&live, ports, run_timeout)
+    let mut hosts = nmap::scan_os(&live, ports, run_timeout)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    enrich_macs(&mut hosts);
+    fusion::fuse_hosts(&mut hosts);
+    hosts
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {
