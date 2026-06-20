@@ -5,6 +5,7 @@ export function RiskBadge({ band, value }: { band: RiskBand; value?: number }) {
   const s = bandStyles[band];
   return (
     <span
+      title="Heuristic risk score — a composite weighting of CVSS severity, exposure and asset criticality, not a calibrated model"
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.text} ${s.bg} ${s.ring}`}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />

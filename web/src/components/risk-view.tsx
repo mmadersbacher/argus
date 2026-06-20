@@ -107,7 +107,7 @@ export function RiskView() {
       <div className="argus-rise">
         <PageHeader
           title="Risk"
-          description="Exposure scoring across the inventory"
+          description="Heuristic exposure scoring across the inventory"
         />
       </div>
 
@@ -135,6 +135,12 @@ export function RiskView() {
           hint="Externally exposed, high or critical"
         />
       </div>
+
+      <p className="text-xs text-muted">
+        Risk is a <span className="font-medium text-fg-2">heuristic</span> 0–100
+        composite of CVSS severity, network exposure, and asset criticality — an
+        opinionated weighting, not a calibrated or trained model.
+      </p>
 
       <Panel
         title="Risk distribution"

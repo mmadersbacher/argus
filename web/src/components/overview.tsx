@@ -54,7 +54,7 @@ export function Overview() {
           <StatCard
             label="Avg risk"
             value={Math.round(summary?.avg_risk ?? 0)}
-            hint="0–100 composite"
+            hint="0–100 heuristic composite"
           />
         </div>
 

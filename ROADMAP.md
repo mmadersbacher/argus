@@ -138,11 +138,15 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       into one `usePolledResource<T>`; add `AbortController` + an in-flight
       sequence guard so slow polls can't show stale data; pause polling on
       hidden tabs; `aria-live` on the live regions.
-- [ ] **Match confidence in the aggregation view**: surface per-CVE confidence
-      on the Vulnerabilities page (`GET /api/vulns`), not just the asset drawer.
-- [ ] **Scoring calibration**: the risk weights are an opinionated heuristic.
-      Either keep them and label the score "heuristic" in the UI, or calibrate
-      against a reference distribution. Do not call it a model until then.
+- [x] **Match confidence in the aggregation view**: `GET /api/vulns` carries a
+      per-CVE `confidence` (the strongest match across instances) and the
+      Vulnerabilities page renders it as a Confidence column, not just in the
+      asset drawer.
+- [x] **Scoring calibration** (honesty path): the risk weights are an
+      opinionated heuristic, and the UI now says so — a tooltip on every risk
+      badge, a methodology line on the Risk page, and "heuristic composite"
+      stat hints. Calibration against a reference distribution is still open;
+      until then the score is labelled heuristic, never a model.
 
 ## P2 — Intelligence (vision, not yet built)
 
