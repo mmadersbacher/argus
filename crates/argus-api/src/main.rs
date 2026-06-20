@@ -1020,4 +1020,116 @@ mod tests {
             "non-regressive enrichment must not emit vulns/risk churn on feed failure"
         );
     }
+
+    /// End-to-end write path against the in-memory store: classify → enrich →
+    /// score → diff → upsert → events, with no Postgres and no network. Every
+    /// stub service carries `product: None` and `cpe: None`, so catalog
+    /// correlation finds nothing and live enrichment short-circuits on its
+    /// empty-vuln early return — the enrichment step still runs, it just has no
+    /// CVEs to fetch, which keeps the test hermetic and fast.
+    #[tokio::test]
+    async fn ingest_persists_classifies_and_is_idempotent() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        fn stub_host(ip: [u8; 4], vendor: &str, ports: &[u16]) -> argus_discovery::DiscoveredHost {
+            argus_discovery::DiscoveredHost {
+                asset: Asset {
+                    id: AssetId::new(),
+                    asset_type: AssetType::It,
+                    criticality: Criticality::Medium,
+                    exposure: Exposure::Internal,
+                    fingerprint: Fingerprint {
+                        vendor: Some(vendor.to_owned()),
+                        ..Fingerprint::default()
+                    },
+                    interfaces: vec![argus_core::Interface {
+                        mac: None,
+                        ip: Some(IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]))),
+                        vlan: None,
+                        hostname: None,
+                    }],
+                    first_seen: OffsetDateTime::UNIX_EPOCH,
+                    last_seen: OffsetDateTime::UNIX_EPOCH,
+                },
+                services: ports
+                    .iter()
+                    .map(|&port| Service {
+                        port,
+                        protocol: Protocol::Tcp,
+                        product: None,
+                        banner: None,
+                        cpe: None,
+                    })
+                    .collect(),
+                open_ports: ports.to_vec(),
+                insecure_score: 0.0,
+            }
+        }
+
+        // A fresh, identical host list per scan (DiscoveredHost isn't Clone, and
+        // dedup is by IP — so re-using the same IPs models the same two hosts).
+        let hosts = || {
+            vec![
+                stub_host([10, 0, 0, 50], "Hikvision", &[554]),
+                stub_host([10, 0, 0, 51], "Dell Inc.", &[445]),
+            ]
+        };
+
+        let store = Store::memory();
+        let locks = IngestLocks::default();
+        let intel = IntelCache::new(None);
+        let tenant = Uuid::new_v4();
+
+        // First scan: two brand-new assets, one `asset.new` event each.
+        let (live, changes) = ingest(&store, &locks, &intel, tenant, hosts())
+            .await
+            .expect("first ingest");
+        assert_eq!(live, 2, "both hosts ingested");
+        assert!(changes >= 2, "each new asset emits at least one change event");
+        assert_eq!(store.load_all(tenant).await.unwrap().len(), 2);
+        let events = store.list_events(tenant, 100).await.unwrap();
+        assert_eq!(
+            events.iter().filter(|e| e.kind == "asset.new").count(),
+            2,
+            "one asset.new per newly discovered host"
+        );
+
+        // Re-scan the identical hosts: nothing changed, so the diff emits no
+        // events and creates no duplicate assets — the end-to-end proof that
+        // classify/enrich/score are deterministic and dedup holds across scans.
+        let (live2, changes2) = ingest(&store, &locks, &intel, tenant, hosts())
+            .await
+            .expect("second ingest");
+        assert_eq!(live2, 2);
+        assert_eq!(changes2, 0, "an unchanged re-scan must emit no change events");
+        assert_eq!(
+            store.load_all(tenant).await.unwrap().len(),
+            2,
+            "re-scan must not duplicate assets"
+        );
+
+        // Mutate one host (a newly observed open port) and re-scan: exactly that
+        // asset registers as changed, still without duplicating it.
+        let mut mutated = hosts();
+        mutated[0].services.push(Service {
+            port: 8080,
+            protocol: Protocol::Tcp,
+            product: None,
+            banner: None,
+            cpe: None,
+        });
+        mutated[0].open_ports.push(8080);
+        let (_live3, changes3) = ingest(&store, &locks, &intel, tenant, mutated)
+            .await
+            .expect("third ingest");
+        assert!(
+            changes3 >= 1,
+            "a newly observed service must register as a change"
+        );
+        assert_eq!(
+            store.load_all(tenant).await.unwrap().len(),
+            2,
+            "mutating a host must not create a new asset"
+        );
+    }
 }

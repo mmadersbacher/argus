@@ -126,11 +126,14 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       `cargo test` is green with no database) cover the `db.rs` path the memory
       backend cannot: FK-backed tenant scoping, the `commit_asset` transaction,
       the atomic monitor claim, and the bulk finding upsert.
-- [ ] **Scan-pipeline e2e test**: drive `ingest()` (classify → enrich → score →
-      diff → upsert → events) against real Postgres with a stub discovery
-      result, so the full write path is covered, not just the store methods.
-      Nothing spawns nmap/masscan yet either — a parser-level harness over
-      canned tool output would close that.
+- [~] **Scan-pipeline e2e test**: `ingest()` is now driven end-to-end against
+      the in-memory store (`ingest_persists_classifies_and_is_idempotent`) —
+      classify → enrich → score → diff → upsert → events, plus an idempotent
+      re-scan (zero change events) and change-on-mutation. It is hermetic (stub
+      services carry no product/CPE, so enrichment short-circuits with no
+      network and no Postgres) and runs on every `cargo test`. Still open: the
+      same drive against real Postgres (`TEST_DATABASE_URL`-gated) and a
+      parser-level harness wiring canned nmap/masscan output through to scoring.
 - [ ] **Frontend data layer**: collapse the five near-identical polling hooks
       into one `usePolledResource<T>`; add `AbortController` + an in-flight
       sequence guard so slow polls can't show stale data; pause polling on
