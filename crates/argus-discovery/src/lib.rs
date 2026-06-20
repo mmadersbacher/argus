@@ -12,12 +12,14 @@ pub mod banner;
 pub mod fingerprint;
 pub mod fusion;
 pub mod masscan;
+pub mod mdns;
 pub mod nmap;
 pub mod oui;
 pub mod portscan;
 pub mod sampling;
 pub mod target;
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,6 +46,10 @@ pub struct ScanOptions {
     pub concurrency: usize,
     /// Skip dead /24 subnets via sampling before the full scan.
     pub sample: bool,
+    /// Run an mDNS/DNS-SD sweep and merge its hostnames/models/services into
+    /// the result (also surfaces in-scope devices that answer mDNS but expose
+    /// no scanned TCP port). Unprivileged.
+    pub mdns: bool,
 }
 
 impl Default for ScanOptions {
@@ -54,6 +60,7 @@ impl Default for ScanOptions {
             banner_timeout: Some(Duration::from_secs(1)),
             concurrency: 256,
             sample: false,
+            mdns: false,
         }
     }
 }
@@ -124,6 +131,11 @@ pub async fn scan(targets: &[IpAddr], opts: &ScanOptions) -> ScanReport {
             live.push(host);
         }
     }
+    if opts.mdns {
+        let found = mdns::discover(Duration::from_millis(2500)).await;
+        let scope: HashSet<IpAddr> = targets.iter().copied().collect();
+        merge_mdns(&mut live, found, &scope);
+    }
     enrich_macs(&mut live);
     fusion::fuse_hosts(&mut live);
 
@@ -168,6 +180,20 @@ pub async fn deep_scan(
     enrich_macs(&mut hosts);
     fusion::fuse_hosts(&mut hosts);
     hosts
+}
+
+/// Unified post-processing for the hosts of any engine: hostnames + identity.
+///
+/// Runs an mDNS/DNS-SD sweep merged in scope, MAC/OUI vendor enrichment, then
+/// signal fusion. Idempotent — safe to run on already-enriched hosts. This is
+/// where hostnames/models and the confident identity come from, regardless of
+/// whether the engine was connect, nmap or masscan+nmap.
+pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
+    let found = mdns::discover(Duration::from_millis(2500)).await;
+    let set: HashSet<IpAddr> = scope.iter().copied().collect();
+    merge_mdns(hosts, found, &set);
+    enrich_macs(hosts);
+    fusion::fuse_hosts(hosts);
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {
@@ -220,6 +246,113 @@ fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHos
         open_ports: ports,
         insecure_score,
         // The light connect scan is payload-free — it does not probe SMB.
+        smb_v1: None,
+    }
+}
+
+/// Merge mDNS findings into the live set: enrich a matching host, or add an
+/// in-scope device that answered mDNS but exposed no scanned TCP port.
+fn merge_mdns(live: &mut Vec<DiscoveredHost>, found: Vec<mdns::MdnsHost>, scope: &HashSet<IpAddr>) {
+    for m in found {
+        if !scope.contains(&m.ip) {
+            continue;
+        }
+        if let Some(host) = live
+            .iter_mut()
+            .find(|h| h.asset.interfaces.iter().any(|i| i.ip == Some(m.ip)))
+        {
+            apply_mdns(host, &m);
+        } else {
+            let mut host = base_host(m.ip);
+            apply_mdns(&mut host, &m);
+            live.push(host);
+        }
+    }
+}
+
+/// Apply an mDNS finding's hostname / model / service types onto a host.
+fn apply_mdns(host: &mut DiscoveredHost, m: &mdns::MdnsHost) {
+    if let Some(name) = &m.hostname {
+        if let Some(iface) = host.asset.interfaces.first_mut() {
+            if iface.hostname.is_none() {
+                iface.hostname = Some(name.clone());
+            }
+        }
+    }
+    if host.asset.fingerprint.model.is_none() {
+        host.asset.fingerprint.model.clone_from(&m.model);
+    }
+    if !m.services.is_empty() {
+        if !host.services.iter().any(|s| s.port == 5353) {
+            host.services.push(Service {
+                port: 5353,
+                protocol: Protocol::Udp,
+                product: Some("mDNS".to_owned()),
+                banner: Some(m.services.join(", ")),
+                cpe: None,
+            });
+        }
+        if host.asset.asset_type == argus_core::AssetType::Unknown {
+            host.asset.asset_type = mdns_asset_type(&m.services);
+        }
+    }
+}
+
+/// Best-effort asset class from advertised mDNS service types.
+fn mdns_asset_type(services: &[String]) -> argus_core::AssetType {
+    use argus_core::AssetType;
+    let has = |needle: &str| services.iter().any(|s| s.contains(needle));
+    if has("_ipp")
+        || has("_printer")
+        || has("_pdl")
+        || has("_scanner")
+        || has("_googlecast")
+        || has("_airplay")
+        || has("_raop")
+        || has("_spotify")
+        || has("_hap")
+        || has("_homekit")
+    {
+        AssetType::Iot
+    } else if has("_workstation")
+        || has("_smb")
+        || has("_ssh")
+        || has("_sftp")
+        || has("_afpovertcp")
+    {
+        AssetType::It
+    } else {
+        AssetType::Unknown
+    }
+}
+
+/// Build a minimal host from an IP alone (an mDNS-only device with no scanned
+/// TCP port). Fusion + MAC/OUI enrichment refine it afterwards.
+fn base_host(ip: IpAddr) -> DiscoveredHost {
+    let now = OffsetDateTime::now_utc();
+    DiscoveredHost {
+        asset: Asset {
+            id: AssetId::new(),
+            asset_type: argus_core::AssetType::Unknown,
+            criticality: Criticality::Medium,
+            exposure: if is_internal(ip) {
+                Exposure::Internal
+            } else {
+                Exposure::InternetFacing
+            },
+            fingerprint: argus_core::Fingerprint::default(),
+            interfaces: vec![Interface {
+                mac: None,
+                ip: Some(ip),
+                vlan: None,
+                hostname: None,
+            }],
+            first_seen: now,
+            last_seen: now,
+        },
+        services: Vec::new(),
+        open_ports: Vec::new(),
+        insecure_score: 0.0,
         smb_v1: None,
     }
 }

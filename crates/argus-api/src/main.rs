@@ -516,7 +516,7 @@ async fn discover(
         Vec::new()
     };
 
-    let (engine, hosts) = if !deep_hosts.is_empty() {
+    let (engine, mut hosts) = if !deep_hosts.is_empty() {
         ("masscan+nmap-os", deep_hosts)
     } else if argus_discovery::nmap::available().await {
         match argus_discovery::nmap::scan(
@@ -551,6 +551,12 @@ async fn discover(
         .await;
         ("connect", report.live)
     };
+
+    // Unified enrichment for every engine: mDNS hostnames/models + MAC/OUI
+    // vendor + signal fusion. Makes a Raspberry Pi show up as
+    // raspberrypi.local / Raspberry Pi / Linux instead of a bare IP.
+    argus_discovery::enrich(&mut hosts, &ips).await;
+
     Ok(Discovery {
         engine,
         hosts,
