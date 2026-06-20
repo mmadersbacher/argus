@@ -109,10 +109,12 @@ fn session_response(
     let set_session = state
         .cookie_cfg
         .set(cookies::SESSION_COOKIE, &token, max_age, true);
-    let set_csrf =
-        state
-            .cookie_cfg
-            .set(cookies::CSRF_COOKIE, &cookies::new_csrf_token(), max_age, false);
+    let set_csrf = state.cookie_cfg.set(
+        cookies::CSRF_COOKIE,
+        &cookies::new_csrf_token(),
+        max_age,
+        false,
+    );
     Ok((
         AppendHeaders([(SET_COOKIE, set_session), (SET_COOKIE, set_csrf)]),
         Json(SessionResponse {

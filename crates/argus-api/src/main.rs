@@ -1111,7 +1111,10 @@ mod tests {
             .await
             .expect("first ingest");
         assert_eq!(live, 2, "both hosts ingested");
-        assert!(changes >= 2, "each new asset emits at least one change event");
+        assert!(
+            changes >= 2,
+            "each new asset emits at least one change event"
+        );
         assert_eq!(store.load_all(tenant).await.unwrap().len(), 2);
         let events = store.list_events(tenant, 100).await.unwrap();
         assert_eq!(
@@ -1127,7 +1130,10 @@ mod tests {
             .await
             .expect("second ingest");
         assert_eq!(live2, 2);
-        assert_eq!(changes2, 0, "an unchanged re-scan must emit no change events");
+        assert_eq!(
+            changes2, 0,
+            "an unchanged re-scan must emit no change events"
+        );
         assert_eq!(
             store.load_all(tenant).await.unwrap().len(),
             2,
@@ -1270,10 +1276,7 @@ mod tests {
             req()
                 .method("DELETE")
                 .uri(&key_path)
-                .header(
-                    axum::http::header::AUTHORIZATION,
-                    format!("Bearer {token}"),
-                )
+                .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

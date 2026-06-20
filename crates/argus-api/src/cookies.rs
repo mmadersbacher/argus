@@ -183,7 +183,10 @@ mod tests {
     #[test]
     fn reads_a_named_cookie_among_several() {
         let h = headers_with_cookie("argus_session=jwt.abc.def; argus_csrf=deadbeef; other=1");
-        assert_eq!(read_cookie(&h, SESSION_COOKIE).as_deref(), Some("jwt.abc.def"));
+        assert_eq!(
+            read_cookie(&h, SESSION_COOKIE).as_deref(),
+            Some("jwt.abc.def")
+        );
         assert_eq!(read_cookie(&h, CSRF_COOKIE).as_deref(), Some("deadbeef"));
         assert_eq!(read_cookie(&h, "missing"), None);
     }

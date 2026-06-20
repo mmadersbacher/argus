@@ -18,8 +18,8 @@ use axum::http::StatusCode;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -317,11 +317,13 @@ where
         // it ambiently, every unsafe method must also echo the CSRF cookie in
         // the x-csrf-token header (double-submit). A present-but-invalid cookie
         // is rejected outright rather than falling through to the Bearer path.
-        if let Some(token) = crate::cookies::read_cookie(&parts.headers, crate::cookies::SESSION_COOKIE)
+        if let Some(token) =
+            crate::cookies::read_cookie(&parts.headers, crate::cookies::SESSION_COOKIE)
         {
             let claims = verify_token(&state.keys, &token)
                 .map_err(|_| unauthorized("invalid or expired session"))?;
-            let csrf_cookie = crate::cookies::read_cookie(&parts.headers, crate::cookies::CSRF_COOKIE);
+            let csrf_cookie =
+                crate::cookies::read_cookie(&parts.headers, crate::cookies::CSRF_COOKIE);
             let csrf_header = parts
                 .headers
                 .get(crate::cookies::CSRF_HEADER)
