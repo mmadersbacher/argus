@@ -22,7 +22,14 @@ async fn main() -> ExitCode {
     };
 
     eprintln!("scanning {} host(s) from '{target}' …", hosts.len());
-    let report = scan(&hosts, &ScanOptions::default()).await;
+    let report = scan(
+        &hosts,
+        &ScanOptions {
+            mdns: true,
+            ..ScanOptions::default()
+        },
+    )
+    .await;
 
     println!(
         "scanned {} host(s) in {} ms — {} live",
@@ -31,17 +38,25 @@ async fn main() -> ExitCode {
         report.live.len()
     );
     for host in &report.live {
-        let ip = host
-            .asset
-            .interfaces
-            .first()
+        let iface = host.asset.interfaces.first();
+        let ip = iface
             .and_then(|i| i.ip)
             .map_or_else(|| "?".to_owned(), |ip| ip.to_string());
-        let dtype = host.asset.fingerprint.device_type.as_deref().unwrap_or("-");
+        let host_name = iface.and_then(|i| i.hostname.as_deref()).unwrap_or("-");
+        let fp = &host.asset.fingerprint;
         println!(
-            "  {ip:<18} {dtype:<22} ports={:?} insecure~{:.0}",
-            host.open_ports, host.insecure_score
+            "  {ip:<16} {host_name:<22} type={:?} dev={} vendor={} os={} model={} conf={} ports={:?}",
+            host.asset.asset_type,
+            fp.device_type.as_deref().unwrap_or("-"),
+            fp.vendor.as_deref().unwrap_or("-"),
+            fp.os.as_deref().unwrap_or("-"),
+            fp.model.as_deref().unwrap_or("-"),
+            fp.confidence,
+            host.open_ports,
         );
+        if !fp.evidence.is_empty() {
+            println!("      evidence: {}", fp.evidence.join(" · "));
+        }
     }
     ExitCode::SUCCESS
 }

@@ -158,6 +158,14 @@ fn fuse_one(host: &mut DiscoveredHost) {
     if let Some(os) = os_from_banners(&banners) {
         evidence.push(format!("banner-os:{os}"));
         conf += 15;
+        // A Raspberry Pi OS banner (e.g. SSH "...Raspbian...") identifies the
+        // device even across a NAT where no MAC/OUI or mDNS is available.
+        if os.contains("Raspberry Pi") {
+            fp.model.get_or_insert_with(|| "Raspberry Pi".to_owned());
+            fp.device_type
+                .get_or_insert_with(|| "single-board-computer".to_owned());
+            host.asset.asset_type = AssetType::It;
+        }
         fp.os = Some(os);
     }
 
@@ -251,6 +259,25 @@ mod tests {
             "corroborated identity is high-confidence"
         );
         assert!(fp.evidence.iter().any(|e| e.starts_with("oui:Raspberry")));
+    }
+
+    #[test]
+    fn raspberry_pi_recognised_from_ssh_banner_alone() {
+        // No OUI, no mDNS (the WSL-NAT / cross-subnet case): the SSH banner's
+        // "Raspbian" token still identifies it as a Raspberry Pi.
+        let mut h = host(
+            None,
+            vec![22],
+            Some("SSH-2.0-OpenSSH_8.4p1 Raspbian-5+deb11u1"),
+            None,
+        );
+        fuse_one(&mut h);
+        assert_eq!(h.asset.asset_type, AssetType::It);
+        assert_eq!(h.asset.fingerprint.model.as_deref(), Some("Raspberry Pi"));
+        assert_eq!(
+            h.asset.fingerprint.device_type.as_deref(),
+            Some("single-board-computer")
+        );
     }
 
     #[test]
