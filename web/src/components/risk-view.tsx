@@ -14,6 +14,7 @@ import { useInventory } from "@/lib/use-inventory";
 import { useEvents } from "@/lib/use-events";
 import { Badge, PageHeader, Panel, StatCard } from "@/components/ui";
 import { Icon } from "@/components/icon";
+import { LiveRegion } from "@/components/live-region";
 import { RiskBadge } from "@/components/risk-badge";
 import { RiskDistribution } from "@/components/risk-distribution";
 import { AssetDrawer } from "@/components/asset-drawer";
@@ -110,6 +111,10 @@ export function RiskView() {
           description="Heuristic exposure scoring across the inventory"
         />
       </div>
+
+      <LiveRegion
+        message={`Average risk ${Math.round(avg)}, ${highCritical} high or critical assets, ${kevAffected} affected by known-exploited CVEs.`}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard

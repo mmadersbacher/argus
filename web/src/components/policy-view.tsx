@@ -5,6 +5,7 @@
 
 import type { Advisory, AdvisoryLevel } from "@/lib/api";
 import { usePolicy } from "@/lib/use-policy";
+import { LiveRegion } from "@/components/live-region";
 import { Badge, PageHeader, Panel, StatCard } from "@/components/ui";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 
@@ -92,6 +93,14 @@ export function PolicyView() {
       <PageHeader
         title="Segmentation"
         description="Advisory zoning and exposure findings — what to segment, isolate or shut off, and why."
+      />
+
+      <LiveRegion
+        message={`${advisories.length} segmentation advisories: ${countBy(
+          "critical",
+        )} critical, ${countBy("high")} high, ${countBy("medium")} medium, ${countBy(
+          "low",
+        )} low.`}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">

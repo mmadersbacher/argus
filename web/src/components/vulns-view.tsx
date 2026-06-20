@@ -33,6 +33,7 @@ import {
   Toggle,
 } from "@/components/ui";
 import { Icon } from "@/components/icon";
+import { LiveRegion } from "@/components/live-region";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 
@@ -287,6 +288,10 @@ export function VulnsView() {
           description="CVE exposure across the inventory"
         />
       </div>
+
+      <LiveRegion
+        message={`${vulns.length} unique CVEs across ${assetsAffected} assets, ${kevCount} known-exploited, ${criticalCount} critical.`}
+      />
 
       {vulns.length === 0 ? (
         <Panel bodyClassName="p-0">

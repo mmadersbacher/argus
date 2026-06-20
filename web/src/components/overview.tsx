@@ -5,6 +5,7 @@
 
 import { useInventory } from "@/lib/use-inventory";
 import { ActivityFeed } from "@/components/activity-feed";
+import { LiveRegion } from "@/components/live-region";
 import { DataSources } from "@/components/data-sources";
 import { RiskDistribution } from "@/components/risk-distribution";
 import { ErrorState, LoadingState } from "@/components/states";
@@ -34,6 +35,12 @@ export function Overview() {
       <PageHeader
         title="Overview"
         description="Continuous asset discovery & exposure"
+      />
+
+      <LiveRegion
+        message={`Inventory: ${total} assets, ${internetFacing} internet-facing, ${criticalOrHigh} high or critical, average risk ${Math.round(
+          summary?.avg_risk ?? 0,
+        )}.`}
       />
 
       <div className="space-y-6">

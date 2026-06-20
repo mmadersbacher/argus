@@ -158,13 +158,14 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       network). The remaining nicety is a parser-level harness wiring canned
       nmap/masscan output through to scoring — the parsers themselves already
       have unit tests over their `SAMPLE` fixtures.
-- [~] **Frontend data layer**: the five polling hooks are unified behind one
+- [x] **Frontend data layer**: the five polling hooks are unified behind one
       `usePolledResource<T>` with an in-flight sequence guard, pause-when-hidden
-      (refetch on re-show), and now `AbortController` cancellation of superseded
-      polls. Still open: `aria-live` on the live regions — done right it needs a
-      concise per-page status region (announcing the whole polled table on every
-      tick would spam screen readers), not a blanket attribute, so it is left
-      for a focused a11y pass.
+      (refetch on re-show), and `AbortController` cancellation of superseded
+      polls. `aria-live` is done the right way: a shared `<LiveRegion>` renders a
+      concise sr-only `role="status"` summary per polled page (Overview,
+      Vulnerabilities, Risk, Segmentation) that announces a short delta when the
+      counts move, rather than re-reading the whole table on every tick (which
+      would spam screen readers).
 - [x] **Match confidence in the aggregation view**: `GET /api/vulns` carries a
       per-CVE `confidence` (the strongest match across instances) and the
       Vulnerabilities page renders it as a Confidence column, not just in the
