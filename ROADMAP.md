@@ -106,10 +106,14 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       credentials. Cookie `Secure`/`SameSite` are env-configurable (cross-site
       HTTPS by default; `ARGUS_COOKIE_SECURE=false` + `ARGUS_COOKIE_SAMESITE=Lax`
       for localhost dev). CSRF is covered by a router-level integration test.
-      *Caveat:* the live cross-origin browser flow was not exercised in a real
-      browser — verify against the deployment's actual origin/HTTPS settings
-      (a genuinely cross-domain console/API would need the CSRF token in the
-      body or a shared cookie domain, since JS can't read a cross-domain cookie).
+      *Verified over real HTTP* (running server + curl): the cookies are set
+      with the right attributes (session `HttpOnly`, CSRF readable), cookie auth
+      + double-submit are enforced (403 without/with-wrong header, pass with the
+      matching one), logout clears both, and the body carries no token. Not yet
+      exercised in a real browser — the topology-dependent step is whether the
+      browser *sends* the cookie for the deployment's origin/HTTPS settings (a
+      genuinely cross-domain console/API would need the CSRF token in the body
+      or a shared cookie `Domain`, since JS can't read a cross-domain cookie).
 - [x] **NVD enrichment concurrency.** The old global gate was held for a
       product's whole paginated fetch, so one slow/large product blocked every
       tenant. Replaced with a per-`vendor:product` single-flight (`OnceCell`)
