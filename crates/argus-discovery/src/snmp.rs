@@ -29,12 +29,14 @@ pub struct SnmpResult {
 }
 
 fn ber_len(len: usize) -> Vec<u8> {
-    if len < 0x80 {
-        vec![len as u8]
-    } else if len < 0x100 {
-        vec![0x81, len as u8]
-    } else {
-        vec![0x82, (len >> 8) as u8, (len & 0xff) as u8]
+    match u8::try_from(len) {
+        Ok(b) if b < 0x80 => vec![b], // short form (< 128)
+        Ok(b) => vec![0x81, b],       // single-byte long form (128..=255)
+        Err(_) => {
+            let hi = u8::try_from((len >> 8) & 0xff).unwrap_or(0xff);
+            let lo = u8::try_from(len & 0xff).unwrap_or(0xff);
+            vec![0x82, hi, lo]
+        }
     }
 }
 
