@@ -3,9 +3,11 @@
 //! Research question FF2: does the context-aware composite score (CVSS + EPSS +
 //! KEV + exposure + criticality) prioritise vulnerabilities better than a raw
 //! CVSS sort? Ground truth is the CISA KEV catalog ("really exploited" → should
-//! rank high). The harness ranks a dataset both ways and reports KEV recall@N,
-//! the mean rank of KEV CVEs, and which exploited CVEs CVSS-only under-ranks —
-//! including the NVD-gap case (a KEV CVE with no CVSS at all).
+//! rank high). The harness ranks a dataset both ways and reports, for each, KEV
+//! recall@N, the mean rank of KEV CVEs plus its size-invariant standards
+//! ROC-AUC (separation of exploited from non-exploited) and average precision
+//! (the rare-positive ranking standard), and which exploited CVEs CVSS-only
+//! under-ranks — including the NVD-gap case (a KEV CVE with no CVSS at all).
 //!
 //! Dataset: a small curated CSV is embedded as the default; pass a path to run
 //! against a real one — `cargo run -p argus-eval -- ff2 <file.csv>` with columns
@@ -132,6 +134,64 @@ fn mean_kev_rank(f: &[Finding], ranking: &[usize]) -> f64 {
     ranks.iter().sum::<usize>() as f64 / ranks.len() as f64
 }
 
+/// ROC-AUC — the probability that a random KEV CVE outranks a random non-KEV
+/// one under `scores` (the Mann-Whitney U statistic, with average ranks for
+/// ties). `0.5` is no better than chance, `1.0` is perfect separation. Unlike
+/// the mean rank it is **size-invariant**, so the composite-vs-CVSS comparison
+/// is comparable across datasets of any size.
+fn roc_auc(scores: &[f64], is_pos: &[bool]) -> f64 {
+    let n_pos = is_pos.iter().filter(|&&p| p).count();
+    let n_neg = is_pos.len() - n_pos;
+    if n_pos == 0 || n_neg == 0 {
+        return 0.0;
+    }
+    // Ascending ranks, averaged within each tie group (so the thousands of
+    // identical CVSS 9.8s — and the no-CVSS floor — are handled correctly).
+    let mut idx: Vec<usize> = (0..scores.len()).collect();
+    idx.sort_by(|&a, &b| scores[a].total_cmp(&scores[b]));
+    let mut ranks = vec![0.0_f64; scores.len()];
+    let mut i = 0;
+    while i < idx.len() {
+        let mut j = i;
+        while j + 1 < idx.len()
+            && scores[idx[j + 1]].total_cmp(&scores[idx[i]]) == std::cmp::Ordering::Equal
+        {
+            j += 1;
+        }
+        let avg_rank = (i + 1 + j + 1) as f64 / 2.0;
+        for &k in &idx[i..=j] {
+            ranks[k] = avg_rank;
+        }
+        i = j + 1;
+    }
+    let sum_pos_ranks: f64 = (0..scores.len())
+        .filter(|&k| is_pos[k])
+        .map(|k| ranks[k])
+        .sum();
+    let u = sum_pos_ranks - (n_pos * (n_pos + 1)) as f64 / 2.0;
+    u / (n_pos as f64 * n_neg as f64)
+}
+
+/// Average precision — the area under the precision–recall curve for `ranking`,
+/// the standard summary for ranking a **rare** positive class (KEV is ~0.5% of
+/// all scored CVEs). `1.0` means every KEV CVE is ranked above every non-KEV
+/// one; it rewards putting exploited bugs at the very top, not just near it.
+fn average_precision(f: &[Finding], ranking: &[usize]) -> f64 {
+    let total_pos = f.iter().filter(|x| x.kev).count();
+    if total_pos == 0 {
+        return 0.0;
+    }
+    let mut tp = 0_usize;
+    let mut sum = 0.0_f64;
+    for (pos, &i) in ranking.iter().enumerate() {
+        if f[i].kev {
+            tp += 1;
+            sum += tp as f64 / (pos + 1) as f64;
+        }
+    }
+    sum / total_pos as f64
+}
+
 /// 1-indexed position of `id` in `ranking`, or 0 if absent.
 fn position(f: &[Finding], ranking: &[usize], id: &str) -> usize {
     ranking
@@ -178,6 +238,32 @@ pub fn run(path: Option<String>) {
         "mean KEV rank",
         mean_kev_rank(&findings, &by_cvss),
         mean_kev_rank(&findings, &by_comp),
+    );
+    // Size-invariant standards: the mean rank above scales with N and is hard to
+    // compare across datasets; ROC-AUC and average precision are not.
+    println!(
+        "{:<18} {:>11.2} {:>11.2}  (mean rank as % of N, lower=better)",
+        "mean KEV %ile",
+        100.0 * mean_kev_rank(&findings, &by_cvss) / total as f64,
+        100.0 * mean_kev_rank(&findings, &by_comp) / total as f64,
+    );
+    let is_kev: Vec<bool> = findings.iter().map(|f| f.kev).collect();
+    let cvss_scores: Vec<f64> = findings
+        .iter()
+        .map(|f| f.cvss.map_or(f64::NEG_INFINITY, f64::from))
+        .collect();
+    let comp_scores: Vec<f64> = findings.iter().map(|f| f64::from(f.composite)).collect();
+    println!(
+        "{:<18} {:>11.3} {:>11.3}  (0.5=chance, higher=better)",
+        "ROC-AUC",
+        roc_auc(&cvss_scores, &is_kev),
+        roc_auc(&comp_scores, &is_kev),
+    );
+    println!(
+        "{:<18} {:>11.3} {:>11.3}  (higher=better)",
+        "avg precision",
+        average_precision(&findings, &by_cvss),
+        average_precision(&findings, &by_comp),
     );
 
     // The FF2 effect: exploited (KEV) CVEs that a CVSS sort mis-ranks — low-CVSS
@@ -248,6 +334,42 @@ mod tests {
         assert!(
             comp < cvss,
             "composite should rank KEV CVEs higher: {comp} vs {cvss}"
+        );
+    }
+
+    #[test]
+    fn roc_auc_is_one_for_perfect_zero_for_reversed_half_for_tied() {
+        // KEV scored strictly above non-KEV → perfect separation.
+        assert!((roc_auc(&[3.0, 2.0, 1.0], &[true, false, false]) - 1.0).abs() < 1e-9);
+        // KEV scored strictly below → worst.
+        assert!(roc_auc(&[1.0, 2.0, 3.0], &[true, false, false]).abs() < 1e-9);
+        // Everything tied → exactly chance (0.5), via the average-rank handling.
+        assert!((roc_auc(&[1.0, 1.0, 1.0, 1.0], &[true, false, true, false]) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn average_precision_is_one_when_all_positives_lead() {
+        let f = parse_dataset("CVE-a,9.0,0.9,true\nCVE-b,8.0,0.9,true\nCVE-c,1.0,0.0,false\n");
+        // The composite ranks both KEV CVEs first → every positive at precision 1.
+        let ap = average_precision(&f, &rank_by_composite(&f));
+        assert!((ap - 1.0).abs() < 1e-9, "AP should be 1.0, got {ap}");
+    }
+
+    #[test]
+    fn composite_separates_kev_by_auc_at_least_as_well_as_cvss() {
+        // The FF2 claim restated in size-invariant terms: the composite's ROC-AUC
+        // is no worse than CVSS-only's on the sample (and strictly better once a
+        // no-CVSS KEV CVE is present, which CVSS sorts to the bottom).
+        let f = parse_dataset(SAMPLE);
+        let is_kev: Vec<bool> = f.iter().map(|x| x.kev).collect();
+        let cvss: Vec<f64> = f
+            .iter()
+            .map(|x| x.cvss.map_or(f64::NEG_INFINITY, f64::from))
+            .collect();
+        let comp: Vec<f64> = f.iter().map(|x| f64::from(x.composite)).collect();
+        assert!(
+            roc_auc(&comp, &is_kev) >= roc_auc(&cvss, &is_kev),
+            "composite AUC must beat or match CVSS-only"
         );
     }
 }
