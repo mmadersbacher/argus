@@ -9,16 +9,21 @@
 
 pub mod arp;
 pub mod arpscan;
+pub mod bacnet;
 pub mod banner;
 pub mod coap;
+pub mod enip;
 pub mod fingerprint;
 pub mod fusion;
 pub mod http;
 pub mod ipp;
+pub mod ldap;
 pub mod masscan;
 pub mod mdns;
 pub mod miio;
+pub mod modbus;
 pub mod mqtt;
+pub mod mssql;
 pub mod netbios;
 pub mod nmap;
 pub mod oui;
@@ -237,6 +242,12 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     pjl_enrich(hosts).await;
     rtsp_enrich(hosts).await;
     mqtt_enrich(hosts).await;
+    // Enterprise + OT identity (directory, database, industrial controllers).
+    ldap_enrich(hosts).await;
+    mssql_enrich(hosts).await;
+    modbus_enrich(hosts).await;
+    enip_enrich(hosts).await;
+    bacnet_enrich(hosts).await;
     enrich_macs(hosts);
     fusion::fuse_hosts(hosts);
 }
@@ -876,6 +887,234 @@ async fn mqtt_enrich(hosts: &mut [DiscoveredHost]) {
         let facet = format!("mqtt: broker rc={} {auth}", info.return_code);
         enrich_service_banner(&mut hosts[idx], port, facet, "mqtt:");
     }
+}
+
+/// Query the rootDSE of each host with an open LDAP port (389/636) — the naming
+/// context + DC hostname identify an Active Directory domain controller.
+async fn ldap_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr, u16)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if let Some(&port) = h.open_ports.iter().find(|&&p| p == 389 || p == 636) {
+            targets.push((i, ip, port));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip, port) in targets {
+        set.spawn(async move {
+            (
+                idx,
+                port,
+                ldap::query(ip, port, Duration::from_secs(4)).await,
+            )
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, port, Some(dse))) = joined else {
+            continue;
+        };
+        apply_ldap(&mut hosts[idx], port, &dse);
+    }
+}
+
+/// Fold an LDAP rootDSE onto a host: DC hostname + a domain banner.
+fn apply_ldap(host: &mut DiscoveredHost, port: u16, dse: &ldap::LdapRootDse) {
+    if let Some(name) = &dse.dns_host_name {
+        if let Some(iface) = host.asset.interfaces.first_mut() {
+            iface.hostname.get_or_insert_with(|| name.clone());
+        }
+    }
+    // A defaultNamingContext / dnsHostName is AD-specific → a domain controller.
+    let is_dc = dse.default_naming_context.is_some() || dse.dns_host_name.is_some();
+    let mut facet = String::from(if is_dc {
+        "ldap: domain-controller"
+    } else {
+        "ldap: directory"
+    });
+    if let Some(nc) = &dse.default_naming_context {
+        let _ = write!(facet, " domain={nc}");
+    }
+    if let Some(h) = &dse.dns_host_name {
+        let _ = write!(facet, " host={h}");
+    }
+    enrich_service_banner(host, port, facet, "ldap:");
+}
+
+/// Ask the SQL Server Browser (UDP 1434) of each host with an open 1433.
+async fn mssql_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&1433) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, mssql::query(ip, Duration::from_secs(3)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(instances))) = joined else {
+            continue;
+        };
+        apply_mssql(&mut hosts[idx], &instances);
+    }
+}
+
+/// Fold MSSQL Browser instances onto a host: version model + an instance banner.
+fn apply_mssql(host: &mut DiscoveredHost, instances: &[mssql::MssqlInstance]) {
+    if host.asset.fingerprint.model.is_none() {
+        if let Some(version) = instances.iter().find_map(|i| i.version.as_ref()) {
+            host.asset.fingerprint.model = Some(format!("SQL Server {version}"));
+        }
+    }
+    let mut facet = String::from("mssql:");
+    for inst in instances {
+        if let Some(name) = &inst.instance {
+            let _ = write!(facet, " {name}");
+        }
+        if let Some(version) = &inst.version {
+            let _ = write!(facet, "/{version}");
+        }
+        if let Some(port) = inst.tcp_port {
+            let _ = write!(facet, "@{port}");
+        }
+    }
+    enrich_service_banner(host, 1433, facet, "mssql:");
+}
+
+/// Read the device identification of each host with an open Modbus port (502).
+async fn modbus_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&502) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, modbus::query(ip, 502, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(id))) = joined else {
+            continue;
+        };
+        apply_modbus(&mut hosts[idx], &id);
+    }
+}
+
+/// Fold a Modbus device identification onto a host: vendor/product model.
+fn apply_modbus(host: &mut DiscoveredHost, id: &modbus::ModbusId) {
+    if host.asset.fingerprint.model.is_none() {
+        host.asset.fingerprint.model.clone_from(&id.product_code);
+    }
+    let mut facet = String::from("modbus:");
+    if let Some(vendor) = &id.vendor {
+        let _ = write!(facet, " {vendor}");
+    }
+    if let Some(product) = &id.product_code {
+        let _ = write!(facet, " {product}");
+    }
+    if let Some(rev) = &id.revision {
+        let _ = write!(facet, " rev {rev}");
+    }
+    enrich_service_banner(host, 502, facet, "modbus:");
+}
+
+/// Probe every known host for an EtherNet/IP identity (UDP 44818) — the protocol
+/// is UDP-only, so it is not gated on a TCP port.
+async fn enip_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let targets: Vec<(usize, IpAddr)> = hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            h.asset
+                .interfaces
+                .first()
+                .and_then(|f| f.ip)
+                .map(|ip| (i, ip))
+        })
+        .collect();
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, enip::query(ip, Duration::from_millis(900)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(id))) = joined else {
+            continue;
+        };
+        apply_enip(&mut hosts[idx], &id);
+    }
+}
+
+/// Fold an EtherNet/IP identity onto a host: product-name model + a banner.
+fn apply_enip(host: &mut DiscoveredHost, id: &enip::EnipIdentity) {
+    if host.asset.fingerprint.model.is_none() {
+        host.asset.fingerprint.model.clone_from(&id.product_name);
+    }
+    let mut facet = String::from("enip: EtherNet/IP");
+    if let Some(name) = &id.product_name {
+        let _ = write!(facet, " {name}");
+    }
+    let _ = write!(facet, " vendor={} type={}", id.vendor_id, id.device_type);
+    if let Some(rev) = &id.revision {
+        let _ = write!(facet, " rev {rev}");
+    }
+    enrich_service_banner(host, 44818, facet, "enip:");
+}
+
+/// Probe every known host for a BACnet device (UDP 47808, unconfirmed Who-Is).
+async fn bacnet_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let targets: Vec<(usize, IpAddr)> = hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            h.asset
+                .interfaces
+                .first()
+                .and_then(|f| f.ip)
+                .map(|ip| (i, ip))
+        })
+        .collect();
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move {
+            (
+                idx,
+                bacnet::query(ip, bacnet::BACNET_PORT, Duration::from_millis(900)).await,
+            )
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(dev))) = joined else {
+            continue;
+        };
+        apply_bacnet(&mut hosts[idx], &dev);
+    }
+}
+
+/// Fold a BACnet I-Am onto a host: device-instance + vendor banner.
+fn apply_bacnet(host: &mut DiscoveredHost, dev: &bacnet::BacnetDevice) {
+    let mut facet = String::from("bacnet:");
+    if let Some(instance) = dev.device_instance {
+        let _ = write!(facet, " device={instance}");
+    }
+    if let Some(vendor) = dev.vendor_id {
+        let _ = write!(facet, " vendor={vendor}");
+    }
+    enrich_service_banner(host, bacnet::BACNET_PORT, facet, "bacnet:");
 }
 
 fn build_host(ip: IpAddr, mut open: Vec<(u16, Option<String>)>) -> DiscoveredHost {

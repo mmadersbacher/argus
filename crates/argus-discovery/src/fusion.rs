@@ -132,6 +132,23 @@ fn os_from_banners(banners: &[String]) -> Option<String> {
 fn device_from_identity(hay: &str) -> Option<(&'static str, AssetType)> {
     let has = |k: &str| hay.contains(k);
     Some(match () {
+        // Protocol-confirmed enterprise + OT identities win first — these come
+        // from a service that named itself (LDAP rootDSE, Modbus/EtherNet/IP/
+        // BACnet device id), not from a guess.
+        () if has("domain-controller") => ("domain-controller", AssetType::It),
+        () if has("modbus")
+            || has("ethernet/ip")
+            || has("bacnet")
+            || has("rockwell")
+            || has("allen-bradley")
+            || has("logix")
+            || has("siemens")
+            || has("schneider")
+            || has("industrial") =>
+        {
+            ("industrial-controller", AssetType::Ot)
+        }
+        () if has("mssql") || has("sql server") => ("database-server", AssetType::It),
         () if has("laserjet")
             || has("officejet")
             || has("printer")
