@@ -18,6 +18,7 @@ use axum::http::StatusCode;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -211,6 +212,41 @@ impl LoginLimiter {
         }
         drop(map);
         allowed
+    }
+}
+
+/// Login rate limiter backed by the active store. The in-memory variant is
+/// per-process (dev / single node); the Postgres variant records attempts in a
+/// shared table so the cap holds cluster-wide across replicas — the
+/// single-instance limitation called out on [`LoginLimiter`].
+pub enum RateLimiter {
+    /// Per-process sliding window (used with the in-memory store).
+    Memory(LoginLimiter),
+    /// Shared sliding window in Postgres (multi-replica deployments).
+    Postgres(PgPool),
+}
+
+impl RateLimiter {
+    /// Record an attempt for `key`; returns `false` when at/over `max` within
+    /// [`LoginLimiter::WINDOW`].
+    pub async fn allow(&self, key: &str, max: usize) -> bool {
+        match self {
+            Self::Memory(limiter) => limiter.allow(key, max),
+            Self::Postgres(pool) => {
+                let max = i64::try_from(max).unwrap_or(i64::MAX);
+                let window = i64::try_from(LoginLimiter::WINDOW.as_secs()).unwrap_or(60);
+                crate::db::rate_limit_allow(pool, key, max, window)
+                    .await
+                    .unwrap_or_else(|err| {
+                        // Fail open: a limiter-query failure must not lock every
+                        // user out of login. The auth path needs the DB anyway,
+                        // so a real outage already fails the request — this only
+                        // covers a limiter-specific glitch. Logged so it shows.
+                        tracing::error!(error = ?err, key, "rate-limit query failed — allowing");
+                        true
+                    })
+            }
+        }
     }
 }
 

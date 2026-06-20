@@ -122,10 +122,18 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       concurrently while the aggregate request rate stays within NVD's limit.
       A 4000-CVE product fetch now delays others by at most one spacing
       interval, not its whole multi-page duration.
-- [ ] **Horizontal scale.** Login rate limiter and the monitor scheduler are
-      single-instance (in-memory limiter; atomic DB claim is replica-safe but
-      the limiter is not). Back the limiter with Postgres/Redis. *Done when:*
-      two API replicas share rate-limit and scheduler state.
+- [x] **Horizontal scale.** The login rate limiter is now Postgres-backed when
+      the store is Postgres (`RateLimiter::Postgres` records each attempt in a
+      shared `login_attempts` table and counts within the sliding window), so
+      the cap holds cluster-wide instead of per-replica; the in-memory limiter
+      stays for the dev store. The monitor scheduler was already replica-safe
+      (atomic DB claim), so both now share state through Postgres. A periodic
+      prune reclaims rows from keys that go quiet. Verified end-to-end against a
+      real database: a gated SQL test plus an HTTP run where the 6th login for
+      one `(ip,email)` returns 429 and the shared rows reflect the cap. *Caveat:*
+      exercised with one API process against shared Postgres, not two literal
+      replicas — but the shared state is the table itself, so replicas share it
+      by construction. (A Redis option could lower per-attempt latency later.)
 - [ ] **Billing & plans** (`argus-api`): per-tenant plan, asset/seat limits
       enforced on ingest and user/key creation, usage metering. *Done when:* a
       tenant over its asset cap is rejected at ingest with a clear error.

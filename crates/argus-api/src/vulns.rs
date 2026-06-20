@@ -556,7 +556,7 @@ mod tests {
         let state = AppState {
             store,
             keys: AuthKeys::from_secret(b"test-secret"),
-            limiter: Arc::new(LoginLimiter::default()),
+            limiter: Arc::new(crate::auth::RateLimiter::Memory(LoginLimiter::default())),
             signup_enabled: false,
             scan_allow_private: true,
             ingest_locks: IngestLocks::default(),

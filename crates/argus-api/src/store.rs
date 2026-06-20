@@ -478,6 +478,19 @@ impl Store {
     /// count removed. The memory store ignores the age window (it has no
     /// persistence to bound over time) and instead caps each tenant to the
     /// newest [`MAX_MEMORY_EVENTS_PER_TENANT`] events; it returns `0`.
+    /// Delete login-attempt rows older than the rate-limit window. Postgres
+    /// only — the in-memory limiter self-cleans, so this is a no-op there.
+    pub async fn prune_login_attempts(&self) -> Result<u64, StoreError> {
+        match self {
+            Self::Postgres(pool) => {
+                let window =
+                    i64::try_from(crate::auth::LoginLimiter::WINDOW.as_secs()).unwrap_or(60);
+                Ok(db::prune_login_attempts(pool, window).await?)
+            }
+            Self::Memory(_) => Ok(0),
+        }
+    }
+
     pub async fn prune_events(&self, retention_days: i64) -> Result<u64, StoreError> {
         match self {
             Self::Postgres(pool) => Ok(db::prune_events(pool, retention_days).await?),
@@ -1212,5 +1225,45 @@ mod tests {
         // Another tenant sees none of it.
         let other = pg_tenant(&store).await;
         assert!(store.list_finding_statuses(other).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pg_rate_limit_enforces_the_window_cap() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let Store::Postgres(pool) = &store else {
+            unreachable!("pg_store yields a Postgres store");
+        };
+        // Unique key per run so concurrent CI runs never collide.
+        let key = format!("test:{}", Uuid::new_v4());
+        let window = 100; // seconds — nothing expires mid-test
+
+        // Three attempts fit the cap of 3; the fourth is over it.
+        for i in 0..3 {
+            assert!(
+                db::rate_limit_allow(pool, &key, 3, window).await.unwrap(),
+                "attempt {i} within the cap must be allowed"
+            );
+        }
+        assert!(
+            !db::rate_limit_allow(pool, &key, 3, window).await.unwrap(),
+            "the fourth attempt exceeds the cap and must be blocked"
+        );
+
+        // A different key carries an independent budget.
+        let other = format!("test:{}", Uuid::new_v4());
+        assert!(db::rate_limit_allow(pool, &other, 3, window).await.unwrap());
+
+        // A zero-length window discounts every prior attempt, proving the count
+        // is window-scoped rather than all-time.
+        assert!(
+            db::rate_limit_allow(pool, &key, 3, 0).await.unwrap(),
+            "an expired window frees the key again"
+        );
+
+        // The periodic prune reclaims rows once they fall outside the window.
+        let pruned = db::prune_login_attempts(pool, 0).await.unwrap();
+        assert!(pruned >= 1, "prune reclaims expired rows");
     }
 }

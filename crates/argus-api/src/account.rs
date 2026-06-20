@@ -164,6 +164,7 @@ pub async fn register(
     if !state
         .limiter
         .allow(&format!("signup:{}", addr.ip()), LoginLimiter::PER_IP_MAX)
+        .await
     {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
@@ -250,9 +251,11 @@ pub async fn login(
     let too_many = !state
         .limiter
         .allow(&format!("ip:{ip}"), LoginLimiter::PER_IP_MAX)
+        .await
         || !state
             .limiter
-            .allow(&format!("pair:{ip}|{email}"), LoginLimiter::PER_PAIR_MAX);
+            .allow(&format!("pair:{ip}|{email}"), LoginLimiter::PER_PAIR_MAX)
+            .await;
     if too_many {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,

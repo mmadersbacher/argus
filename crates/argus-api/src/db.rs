@@ -445,6 +445,61 @@ pub async fn prune_events(pool: &PgPool, retention_days: i64) -> Result<u64, sql
     Ok(result.rows_affected())
 }
 
+/// Record a login attempt for `bucket_key` and report whether it is allowed:
+/// `true` iff fewer than `max` attempts for the key fall within the last
+/// `window_secs`. Shared across replicas, so the cap is enforced cluster-wide
+/// rather than once per process.
+///
+/// One statement: the count is taken against the window directly. A
+/// data-modifying CTE's deletes are invisible to sibling CTEs, so the
+/// opportunistic purge only reclaims this key's expired rows and never skews
+/// the count. Under heavy concurrent attempts on the *same* key two callers
+/// can both read `n = max - 1` and both insert, so the cap may be exceeded by
+/// the momentary concurrency — an acceptable coarse bound for brute-force
+/// defence, and still far tighter than the per-replica budget it replaces.
+pub async fn rate_limit_allow(
+    pool: &PgPool,
+    bucket_key: &str,
+    max: i64,
+    window_secs: i64,
+) -> Result<bool, sqlx::Error> {
+    let (allowed,): (bool,) = sqlx::query_as(
+        "WITH purged AS (
+             DELETE FROM login_attempts
+             WHERE bucket_key = $1 AND attempted_at < now() - make_interval(secs => $3)
+         ),
+         cnt AS (
+             SELECT count(*) AS n FROM login_attempts
+             WHERE bucket_key = $1 AND attempted_at >= now() - make_interval(secs => $3)
+         ),
+         ins AS (
+             INSERT INTO login_attempts (bucket_key)
+             SELECT $1 WHERE (SELECT n FROM cnt) < $2
+             RETURNING 1
+         )
+         SELECT EXISTS (SELECT 1 FROM ins)",
+    )
+    .bind(bucket_key)
+    .bind(max)
+    .bind(window_secs)
+    .fetch_one(pool)
+    .await?;
+    Ok(allowed)
+}
+
+/// Delete login-attempt rows older than `window_secs` across all keys. The
+/// per-key purge in [`rate_limit_allow`] only reclaims keys that are queried
+/// again; this periodic sweep bounds growth from keys that have gone quiet.
+pub async fn prune_login_attempts(pool: &PgPool, window_secs: i64) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM login_attempts WHERE attempted_at < now() - make_interval(secs => $1)",
+    )
+    .bind(window_secs)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// List a tenant's most recent change events, newest first.
 pub async fn list_events(
     pool: &PgPool,

@@ -38,7 +38,7 @@ mod store;
 mod vulns;
 
 use argus_vuln::intel::IntelCache;
-use auth::{AuthContext, AuthKeys, LoginLimiter};
+use auth::{AuthContext, AuthKeys, LoginLimiter, RateLimiter};
 use seed::{scored_from_discovered, seed_assets, ScoredAsset, Summary};
 use store::{IngestLocks, Store, StoreError};
 
@@ -49,8 +49,9 @@ pub struct AppState {
     pub store: Store,
     /// JWT signing/verification keys.
     pub keys: AuthKeys,
-    /// Login brute-force limiter.
-    pub limiter: Arc<LoginLimiter>,
+    /// Login brute-force limiter (in-memory per-process, or Postgres-backed and
+    /// shared across replicas).
+    pub limiter: Arc<RateLimiter>,
     /// Whether `POST /api/auth/register` is open (`ARGUS_SIGNUP_ENABLED`).
     pub signup_enabled: bool,
     /// Whether scans may target private/internal ranges
@@ -86,10 +87,16 @@ async fn main() {
         "ARGUS_SCAN_ALLOW_PRIVATE",
         matches!(store, Store::Memory(_)),
     );
+    // Share rate-limit state across replicas when persistent (Postgres);
+    // fall back to the per-process in-memory limiter for the dev store.
+    let limiter = Arc::new(match &store {
+        Store::Postgres(pool) => RateLimiter::Postgres(pool.clone()),
+        Store::Memory(_) => RateLimiter::Memory(LoginLimiter::default()),
+    });
     let state = AppState {
         store,
         keys: AuthKeys::from_secret(&auth::load_or_generate_secret()),
-        limiter: Arc::new(LoginLimiter::default()),
+        limiter,
         signup_enabled: env_flag("ARGUS_SIGNUP_ENABLED", false),
         scan_allow_private,
         ingest_locks: ingest_locks.clone(),
@@ -772,6 +779,15 @@ fn spawn_scheduler(
                     Ok(pruned) => tracing::info!(pruned, "pruned old change events"),
                     Err(err) => tracing::error!(error = ?err, "event prune failed"),
                 }
+                // Reclaim expired rate-limit rows for keys that went quiet
+                // (active keys self-purge on each attempt). No-op on memory.
+                match store.prune_login_attempts().await {
+                    Ok(pruned) if pruned > 0 => {
+                        tracing::debug!(pruned, "pruned old login attempts");
+                    }
+                    Ok(_) => {}
+                    Err(err) => tracing::error!(error = ?err, "login-attempt prune failed"),
+                }
             }
 
             let due = match store.claim_due_monitors().await {
@@ -1161,7 +1177,7 @@ mod tests {
         let state = AppState {
             store: Store::memory(),
             keys,
-            limiter: Arc::new(LoginLimiter::default()),
+            limiter: Arc::new(RateLimiter::Memory(LoginLimiter::default())),
             signup_enabled: false,
             scan_allow_private: true,
             ingest_locks: IngestLocks::default(),
