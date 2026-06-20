@@ -15,7 +15,7 @@ export interface PolicyFeed {
  *  the inventory server-side, same cadence as the CVE rollup. */
 export function usePolicy(): PolicyFeed {
   const { data, error, loading } = usePolledResource(
-    useCallback(() => fetchPolicy(), []),
+    useCallback((signal: AbortSignal) => fetchPolicy(signal), []),
     { intervalMs: 30000 },
   );
   return { advisories: data, error, loading };

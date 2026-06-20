@@ -15,7 +15,7 @@ export interface EventFeed {
  *  inventory so the dashboard updates in lockstep. */
 export function useEvents(limit = 50): EventFeed {
   const { data, error, loading, reload } = usePolledResource(
-    useCallback(() => fetchEvents(limit), [limit]),
+    useCallback((signal: AbortSignal) => fetchEvents(limit, signal), [limit]),
     { intervalMs: 15000 },
   );
   return { events: data ?? [], error, loading, reload };

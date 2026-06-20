@@ -17,7 +17,7 @@ export interface VulnFeed {
  *  inventory, so a slower cadence than the 15s inventory poll is enough. */
 export function useVulns(): VulnFeed {
   const { data, error, loading, reload } = usePolledResource(
-    useCallback(() => fetchVulns(), []),
+    useCallback((signal: AbortSignal) => fetchVulns(signal), []),
     { intervalMs: 30000 },
   );
   return { vulns: data, error, loading, reload };

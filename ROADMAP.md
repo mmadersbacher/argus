@@ -134,10 +134,13 @@ Ordered by what blocks running this for real tenants. Each has a done-criterion.
       network and no Postgres) and runs on every `cargo test`. Still open: the
       same drive against real Postgres (`TEST_DATABASE_URL`-gated) and a
       parser-level harness wiring canned nmap/masscan output through to scoring.
-- [ ] **Frontend data layer**: collapse the five near-identical polling hooks
-      into one `usePolledResource<T>`; add `AbortController` + an in-flight
-      sequence guard so slow polls can't show stale data; pause polling on
-      hidden tabs; `aria-live` on the live regions.
+- [~] **Frontend data layer**: the five polling hooks are unified behind one
+      `usePolledResource<T>` with an in-flight sequence guard, pause-when-hidden
+      (refetch on re-show), and now `AbortController` cancellation of superseded
+      polls. Still open: `aria-live` on the live regions — done right it needs a
+      concise per-page status region (announcing the whole polled table on every
+      tick would spam screen readers), not a blanket attribute, so it is left
+      for a focused a11y pass.
 - [x] **Match confidence in the aggregation view**: `GET /api/vulns` carries a
       per-CVE `confidence` (the strongest match across instances) and the
       Vulnerabilities page renders it as a Confidence column, not just in the

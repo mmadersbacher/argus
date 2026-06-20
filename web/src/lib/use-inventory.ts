@@ -22,11 +22,10 @@ export interface Inventory {
 export function useInventory(): Inventory {
   const { data, error, loading, reload } = usePolledResource(
     useCallback(
-      () =>
-        Promise.all([getSummary(), getAssets()]).then(([summary, assets]) => ({
-          summary,
-          assets,
-        })),
+      (signal: AbortSignal) =>
+        Promise.all([getSummary(signal), getAssets(signal)]).then(
+          ([summary, assets]) => ({ summary, assets }),
+        ),
       [],
     ),
     { intervalMs: 15000 },

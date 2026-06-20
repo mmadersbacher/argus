@@ -26,14 +26,16 @@ interface Options {
  *    nothing has loaded yet;
  *  - overlap guard: out-of-order responses are dropped (only the newest
  *    in-flight request may update state), so a slow poll resolving late cannot
- *    paint stale data over a newer result;
+ *    paint stale data over a newer result. The superseded request is also
+ *    `AbortController`-cancelled, so it frees its socket instead of running to
+ *    completion just to be discarded — the `fetcher` is handed the signal;
  *  - pause-when-hidden: no polling against a backgrounded tab; refetch on
  *    re-show so the view is current the moment it is looked at again;
  *  - re-runs whenever `fetcher` identity changes — wrap it in `useCallback`
  *    keyed on its inputs (e.g. `[days]`).
  */
 export function usePolledResource<T>(
-  fetcher: () => Promise<T>,
+  fetcher: (signal: AbortSignal) => Promise<T>,
   { intervalMs, pauseWhenHidden = true }: Options = {},
 ): PolledResource<T> {
   const [data, setData] = useState<T | null>(null);
@@ -42,18 +44,26 @@ export function usePolledResource<T>(
   const mounted = useRef(true);
   const hasData = useRef(false);
   const seq = useRef(0);
+  const inflight = useRef<AbortController | null>(null);
 
   const reload = useCallback(async () => {
     const ticket = ++seq.current;
+    // Cancel any request this one supersedes, then own the in-flight slot.
+    inflight.current?.abort();
+    const controller = new AbortController();
+    inflight.current = controller;
     try {
-      const next = await fetcher();
+      const next = await fetcher(controller.signal);
       // Drop if unmounted or superseded by a newer in-flight request.
       if (!mounted.current || ticket !== seq.current) return;
       hasData.current = true;
       setData(next);
       setError(null);
     } catch (e) {
-      if (!mounted.current || ticket !== seq.current) return;
+      // A request we deliberately aborted (superseded or unmounted) is not a
+      // failure — it was cancelled on purpose, so never surface it as an error.
+      if (controller.signal.aborted || !mounted.current || ticket !== seq.current)
+        return;
       // Silent once data has loaded — keep the last good data on screen
       // instead of swapping it for a full-page error on a transient blip.
       if (!hasData.current) {
@@ -91,6 +101,7 @@ export function usePolledResource<T>(
 
     return () => {
       mounted.current = false;
+      inflight.current?.abort();
       if (id) clearInterval(id);
       if (onVisible) document.removeEventListener("visibilitychange", onVisible);
     };

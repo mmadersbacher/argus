@@ -217,8 +217,10 @@ export type { Role, Session };
 
 // ---- inventory ------------------------------------------------------------
 
-export const getSummary = () => fetchJSON<Summary>("/api/summary");
-export const getAssets = () => fetchJSON<ScoredAsset[]>("/api/assets");
+export const getSummary = (signal?: AbortSignal) =>
+  fetchJSON<Summary>("/api/summary", { signal });
+export const getAssets = (signal?: AbortSignal) =>
+  fetchJSON<ScoredAsset[]>("/api/assets", { signal });
 
 /** Set business-context overrides (criticality/exposure) and recompute risk.
  *  Requires analyst or higher; returns the updated asset. */
@@ -309,8 +311,8 @@ export type ArgusEvent = EventBase &
   );
 
 /** Newest first; the API clamps limit to 1..=200 (default 50). */
-export const fetchEvents = (limit = 50) =>
-  fetchJSON<ArgusEvent[]>(`/api/events?limit=${limit}`);
+export const fetchEvents = (limit = 50, signal?: AbortSignal) =>
+  fetchJSON<ArgusEvent[]>(`/api/events?limit=${limit}`, { signal });
 
 export interface MonitorSettings {
   target: string;
@@ -368,8 +370,8 @@ export interface VulnRow {
   affected: VulnAffectedAsset[];
 }
 
-export async function fetchVulns(): Promise<VulnRow[]> {
-  return fetchJSON<VulnRow[]>("/api/vulns");
+export async function fetchVulns(signal?: AbortSignal): Promise<VulnRow[]> {
+  return fetchJSON<VulnRow[]>("/api/vulns", { signal });
 }
 
 // ---- topology graph --------------------------------------------------------
@@ -544,8 +546,8 @@ export interface ExposureReport {
 }
 
 /** The API clamps days to 1..=90 (event retention window). */
-export const fetchReport = (days = 30) =>
-  fetchJSON<ExposureReport>(`/api/report?days=${days}`);
+export const fetchReport = (days = 30, signal?: AbortSignal) =>
+  fetchJSON<ExposureReport>(`/api/report?days=${days}`, { signal });
 
 // ---- policy / segmentation ---------------------------------------------------
 
@@ -568,4 +570,5 @@ export interface Advisory {
   affected: AffectedAsset[];
 }
 
-export const fetchPolicy = () => fetchJSON<Advisory[]>("/api/policy");
+export const fetchPolicy = (signal?: AbortSignal) =>
+  fetchJSON<Advisory[]>("/api/policy", { signal });

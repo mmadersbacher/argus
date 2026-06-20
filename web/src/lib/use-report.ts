@@ -17,7 +17,7 @@ export interface ReportFeed {
  *  regenerates explicitly. */
 export function useReport(days: number): ReportFeed {
   const { data, error, loading, reload } = usePolledResource(
-    useCallback(() => fetchReport(days), [days]),
+    useCallback((signal: AbortSignal) => fetchReport(days, signal), [days]),
   );
   return { report: data, error, loading, regenerate: reload };
 }
