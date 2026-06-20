@@ -12,6 +12,7 @@ import {
   type Criticality,
   type Exposure,
   type ScoredAsset,
+  type Vulnerability,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
@@ -21,12 +22,111 @@ import {
   exposureLabel,
   formatCvss,
   formatEpss,
+  isConfirmedConfidence,
 } from "@/lib/ui";
 import { Badge, Drawer, Select } from "@/components/ui";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
 
 const CRITICALITIES: Criticality[] = ["low", "medium", "high", "critical"];
 const EXPOSURES: Exposure[] = ["internal", "internet_facing", "unknown"];
+
+/** One CVE row inside the vulnerabilities section. */
+function VulnItem({ v }: { v: Vulnerability }) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line px-3 py-2.5">
+      <a
+        href={`https://nvd.nist.gov/vuln/detail/${v.cve_id}`}
+        target="_blank"
+        rel="noreferrer"
+        className="rounded font-mono text-xs font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        {v.cve_id}
+      </a>
+      <SeverityBadge severity={v.severity} />
+      {v.cvss ? (
+        <span className="text-xs tabular-nums text-fg-2">
+          CVSS {formatCvss(v.cvss.base_score)}
+        </span>
+      ) : null}
+      {v.epss ? (
+        <span className="text-xs tabular-nums text-muted">
+          EPSS {formatEpss(v.epss.score)}
+        </span>
+      ) : null}
+      <span
+        className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
+        title={confidenceHint[v.match_confidence]}
+      >
+        {confidenceLabel[v.match_confidence]}
+      </span>
+      {v.kev ? (
+        <span className="ml-auto">
+          <Badge tone="danger">KEV</Badge>
+        </span>
+      ) : null}
+    </li>
+  );
+}
+
+/** Vulnerabilities split into confirmed (version-checked, drives the score)
+ *  and potential (product present but applicability unverified — leads to
+ *  verify, never scored). This is the "is the host actually vulnerable, or is
+ *  the product just present?" distinction made visible. */
+function VulnSection({ vulns }: { vulns: Vulnerability[] }) {
+  const confirmed = vulns.filter((v) => isConfirmedConfidence(v.match_confidence));
+  const potential = vulns.filter((v) => !isConfirmedConfidence(v.match_confidence));
+  return (
+    <section>
+      <Overline>
+        Vulnerabilities <span className="tabular-nums">({vulns.length})</span>
+      </Overline>
+      {vulns.length === 0 ? (
+        <p className="mt-2 text-sm text-muted">No known CVEs.</p>
+      ) : (
+        <div className="mt-3 space-y-4">
+          <div>
+            <p className="text-xs font-medium text-fg-2">
+              Confirmed{" "}
+              <span className="tabular-nums text-muted">({confirmed.length})</span>
+              <span className="ml-2 font-normal text-muted">
+                version-checked — drives the risk score
+              </span>
+            </p>
+            {confirmed.length === 0 ? (
+              <p className="mt-1.5 text-sm text-muted">
+                No confirmed vulnerabilities.
+              </p>
+            ) : (
+              <ul className="mt-1.5 space-y-2">
+                {confirmed.map((v) => (
+                  <VulnItem key={v.cve_id} v={v} />
+                ))}
+              </ul>
+            )}
+          </div>
+          {potential.length > 0 && (
+            <div className="opacity-80">
+              <p className="text-xs font-medium text-fg-2">
+                Potential{" "}
+                <span className="tabular-nums text-muted">
+                  ({potential.length})
+                </span>
+                <span className="ml-2 font-normal text-muted">
+                  product present, version unverified — verify, not scored
+                </span>
+              </p>
+              <ul className="mt-1.5 space-y-2">
+                {potential.map((v) => (
+                  <VulnItem key={v.cve_id} v={v} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 const criticalityLabel: Record<Criticality, string> = {
   low: "Low",
@@ -263,55 +363,7 @@ export function AssetDrawer({
         )}
       </section>
 
-      <section>
-        <Overline>
-          Vulnerabilities{" "}
-          <span className="tabular-nums">({asset.vulnerabilities.length})</span>
-        </Overline>
-        {asset.vulnerabilities.length === 0 ? (
-          <p className="mt-2 text-sm text-muted">No known CVEs.</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {asset.vulnerabilities.map((v) => (
-              <li
-                key={v.cve_id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line px-3 py-2.5"
-              >
-                <a
-                  href={`https://nvd.nist.gov/vuln/detail/${v.cve_id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded font-mono text-xs font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  {v.cve_id}
-                </a>
-                <SeverityBadge severity={v.severity} />
-                {v.cvss ? (
-                  <span className="text-xs tabular-nums text-fg-2">
-                    CVSS {formatCvss(v.cvss.base_score)}
-                  </span>
-                ) : null}
-                {v.epss ? (
-                  <span className="text-xs tabular-nums text-muted">
-                    EPSS {formatEpss(v.epss.score)}
-                  </span>
-                ) : null}
-                <span
-                  className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
-                  title={confidenceHint[v.match_confidence]}
-                >
-                  {confidenceLabel[v.match_confidence]}
-                </span>
-                {v.kev ? (
-                  <span className="ml-auto">
-                    <Badge tone="danger">KEV</Badge>
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <VulnSection vulns={asset.vulnerabilities} />
     </Drawer>
   );
 }

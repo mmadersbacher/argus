@@ -57,6 +57,13 @@ export const confidenceHint: Record<Confidence, string> = {
   low: "Matched on product name only — version not checked, so it may not apply.",
 };
 
+/** Whether a match confidence counts as a *confirmed* finding (version
+ *  applicability verified) versus a *potential* one (product present but
+ *  unverified). Mirrors `Vulnerability::is_confirmed` in the backend: only
+ *  confirmed findings drive the risk score. */
+export const isConfirmedConfidence = (c: Confidence): boolean =>
+  c === "high" || c === "confirmed";
+
 /** Icon tile per asset type — shared by the assets, network and risk views. */
 export const assetTypeIcon: Record<AssetType, IconName> = {
   it: "server",
