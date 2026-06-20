@@ -45,19 +45,32 @@ pub async fn discover(window: Duration) -> Vec<WsdHost> {
     };
     let _ = sock.set_multicast_ttl_v4(2);
     let probe = build_probe();
-    if sock.send_to(probe.as_bytes(), WSD_V4).await.is_err() {
-        return Vec::new();
-    }
 
     let mut acc: BTreeMap<IpAddr, WsdHost> = BTreeMap::new();
     let mut buf = vec![0u8; 65536];
-    let deadline = Instant::now() + window;
+    let start = Instant::now();
+    let deadline = start + window;
+    // Re-send the probe up to three times spread across the window: WSD is lossy
+    // UDP and a power-saving device may only wake partway through, so a single
+    // probe under-discovers. Between sends we keep listening on short hops.
+    let mut sends = 0u32;
+    let mut next_send = start;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let now = Instant::now();
+        if sends < 3 && now >= next_send {
+            if sock.send_to(probe.as_bytes(), WSD_V4).await.is_err() && sends == 0 {
+                return Vec::new();
+            }
+            sends += 1;
+            next_send = now + window / 3;
+        }
+        let remaining = deadline.saturating_duration_since(now);
         if remaining.is_zero() {
             break;
         }
-        match timeout(remaining, sock.recv_from(&mut buf)).await {
+        // Cap the wait so an idle window still cycles back to re-send.
+        let recv_wait = remaining.min(Duration::from_millis(400));
+        match timeout(recv_wait, sock.recv_from(&mut buf)).await {
             Ok(Ok((n, src))) => {
                 if let Ok(xml) = std::str::from_utf8(&buf[..n]) {
                     if let Some(host) = parse_probe_matches(xml, src.ip()) {
@@ -66,14 +79,17 @@ pub async fn discover(window: Duration) -> Vec<WsdHost> {
                     }
                 }
             }
-            _ => break,
+            Ok(Err(_)) => break, // socket error
+            Err(_) => {}         // recv timeout — loop to maybe re-send
         }
     }
     acc.into_values().collect()
 }
 
-/// Build the WS-Discovery `Probe` SOAP 1.2 envelope. Probes for the broadest
-/// device set (`wsdp:Device`).
+/// Build the WS-Discovery `Probe` SOAP 1.2 envelope. The `Probe` body is empty
+/// (no `Types`), which matches **every** WSD device — printers, cameras, Windows
+/// hosts — exactly as Windows' own discovery does. A `Types`-restricted probe
+/// would silently miss any device that does not claim that exact QName.
 fn build_probe() -> String {
     format!(
         concat!(
@@ -81,17 +97,14 @@ fn build_probe() -> String {
             r#"<soap:Envelope "#,
             r#"xmlns:soap="http://www.w3.org/2003/05/soap-envelope" "#,
             r#"xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" "#,
-            r#"xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" "#,
-            r#"xmlns:wsdp="http://schemas.xmlsoap.org/ws/2006/02/devprof">"#,
+            r#"xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery">"#,
             r#"<soap:Header>"#,
             r#"<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>"#,
             r#"<wsa:MessageID>{message_id}</wsa:MessageID>"#,
             r#"<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>"#,
             r#"</soap:Header>"#,
             r#"<soap:Body>"#,
-            r#"<wsd:Probe>"#,
-            r#"<wsd:Types>wsdp:Device</wsd:Types>"#,
-            r#"</wsd:Probe>"#,
+            r#"<wsd:Probe/>"#,
             r#"</soap:Body>"#,
             r#"</soap:Envelope>"#,
         ),
