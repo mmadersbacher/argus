@@ -170,13 +170,9 @@ export function RiskView() {
               <Icon name={assetTypeIcon[a.asset_type]} size={16} />
             </span>
             <div className="min-w-0">
-              <button
-                type="button"
-                onClick={() => setSelectedId(a.id)}
-                className="block max-w-full truncate rounded text-left font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
+              <span className="block max-w-full truncate font-medium text-fg">
                 {a.fingerprint.device_type ?? "Unknown device"}
-              </button>
+              </span>
               <div className="truncate text-xs text-muted">{sub || "—"}</div>
             </div>
           </div>
@@ -316,6 +312,7 @@ export function RiskView() {
             getRowId={(a) => a.id}
             sort={sort}
             onSortChange={setSort}
+            onRowClick={(a) => setSelectedId(a.id)}
             density="compact"
           />
         )}
