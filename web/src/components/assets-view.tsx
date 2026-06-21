@@ -488,7 +488,7 @@ export function AssetsView() {
             Grouped by type
           </h2>
           {filter?.kind === "type" ? (
-            <Button variant="ghost" size="sm" onClick={() => setFilter(null)}>
+            <Button variant="ghost" size="sm" onClick={() => { setPage(1); setFilter(null); }}>
               Show all
             </Button>
           ) : null}
@@ -521,7 +521,7 @@ export function AssetsView() {
             Grouped by risk
           </h2>
           {filter?.kind === "band" ? (
-            <Button variant="ghost" size="sm" onClick={() => setFilter(null)}>
+            <Button variant="ghost" size="sm" onClick={() => { setPage(1); setFilter(null); }}>
               Show all
             </Button>
           ) : null}
