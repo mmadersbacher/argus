@@ -369,14 +369,16 @@ function sortVulns(rows: VulnRow[], sort: SortState): VulnRow[] {
         if (a.kev === b.kev) return 0;
         return (a.kev ? 1 : -1) * dir;
       case "cvss": {
-        const av = a.cvss ?? -1;
-        const bv = b.cvss ?? -1;
-        return (av - bv) * dir;
+        if (a.cvss === null && b.cvss === null) return 0;
+        if (a.cvss === null) return 1;   // nulls always last
+        if (b.cvss === null) return -1;
+        return (a.cvss - b.cvss) * dir;
       }
       case "epss": {
-        const av = a.epss ?? -1;
-        const bv = b.epss ?? -1;
-        return (av - bv) * dir;
+        if (a.epss === null && b.epss === null) return 0;
+        if (a.epss === null) return 1;
+        if (b.epss === null) return -1;
+        return (a.epss - b.epss) * dir;
       }
       case "affected":
         return (a.affected.length - b.affected.length) * dir;
