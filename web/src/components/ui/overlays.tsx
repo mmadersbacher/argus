@@ -279,7 +279,7 @@ export function Menu({
   items: MenuItem[];
   align?: "start" | "end";
   header?: React.ReactNode;
-  /** Override the default secondary-button styling on the trigger wrapper. */
+  /** Overrides the trigger's VISUAL classes only; the focus ring is always applied by the primitive. */
   triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -305,14 +305,14 @@ export function Menu({
         type="button"
         ref={refs.setReference}
         {...getReferenceProps()}
-        className={
+        className={cx(
+          focusRing,
           triggerClassName ??
-          cx(
-            "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
-            focusRing,
-            buttonVariants.secondary,
-          )
-        }
+            cx(
+              "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
+              buttonVariants.secondary,
+            ),
+        )}
       >
         {trigger}
       </button>

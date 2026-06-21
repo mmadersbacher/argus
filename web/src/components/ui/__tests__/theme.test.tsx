@@ -3,6 +3,8 @@ import { ThemeProvider, useTheme } from "@/components/theme";
 
 // jsdom does not implement matchMedia — provide a minimal stub
 beforeEach(() => {
+  localStorage.clear();
+  document.documentElement.classList.remove("dark");
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({
@@ -13,6 +15,10 @@ beforeEach(() => {
       dispatchEvent: vi.fn(),
     }),
   });
+});
+
+afterEach(() => {
+  document.documentElement.classList.remove("dark");
 });
 
 function Consumer({ onMount }: { onMount: (ctx: ReturnType<typeof useTheme>) => void }) {
