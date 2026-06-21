@@ -10,7 +10,7 @@ import { useInventory } from "@/lib/use-inventory";
 import { Icon } from "@/components/icon";
 import { AssetDrawer } from "@/components/asset-drawer";
 import { RiskBadge } from "@/components/risk-badge";
-import { PageHeader, Panel, StatCard } from "@/components/ui";
+import { Input, Select, PageHeader, Panel, StatCard } from "@/components/ui";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 
 /** Parses a dotted-quad IPv4 address; returns its four octets or null. */
@@ -166,8 +166,38 @@ export function NetworkView() {
   // Drawer selection by id, never by object: the asset is re-derived from the
   // latest poll data, so the drawer always shows fresh values.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [riskFilter, setRiskFilter] = useState<RiskBand | "">("");
+  const [typeFilter, setTypeFilter] = useState("");
 
   const groups = useMemo(() => groupBySubnet(assets), [assets]);
+
+  const assetTypes = useMemo(
+    () => [...new Set(assets.map((a) => a.asset_type))].sort(),
+    [assets],
+  );
+
+  const visibleGroups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return groups
+      .map((group) => {
+        const filtered = group.hosts.filter((host) => {
+          const matchSearch =
+            !q ||
+            host.title.toLowerCase().includes(q) ||
+            (host.ip?.toLowerCase().includes(q) ?? false) ||
+            host.asset.asset_type.toLowerCase().includes(q);
+          const matchRisk = !riskFilter || host.asset.risk.band === riskFilter;
+          const matchType = !typeFilter || host.asset.asset_type === typeFilter;
+          return matchSearch && matchRisk && matchType;
+        });
+        if (filtered.length === 0) return null;
+        const worst =
+          bandOrder.find((band) => filtered.some((h) => h.asset.risk.band === band)) ?? "info";
+        return { ...group, hosts: filtered, worst };
+      })
+      .filter(Boolean) as SubnetGroup[];
+  }, [groups, search, riskFilter, typeFilter]);
 
   // If the selected asset disappears after a poll, close the drawer.
   useEffect(() => {
@@ -209,6 +239,35 @@ export function NetworkView() {
         </Panel>
       ) : (
         <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <Input
+              placeholder="Search by IP, hostname, or type…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="max-w-xs"
+            />
+            <Select
+              value={riskFilter}
+              onChange={(e) => setRiskFilter(e.target.value as RiskBand | "")}
+            >
+              <option value="">All risks</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="info">Info</option>
+            </Select>
+            <Select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+            >
+              <option value="">All types</option>
+              {assetTypes.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </Select>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Subnets"
@@ -229,7 +288,7 @@ export function NetworkView() {
             />
           </div>
 
-          {groups.map((group) => (
+          {visibleGroups.map((group) => (
             <Panel
               key={group.key}
               title={group.label}

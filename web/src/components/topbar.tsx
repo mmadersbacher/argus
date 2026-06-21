@@ -1,42 +1,19 @@
 "use client";
 
-// Top chrome: mobile nav trigger, functional asset search, live indicator
-// and the account menu.
+// Top chrome: mobile nav trigger, functional asset search, live indicator,
+// theme toggle and the account menu (now backed by the Menu primitive).
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Icon } from "@/components/icon";
-import { Badge } from "@/components/ui";
+import { ThemeToggle } from "@/components/theme";
+import { Badge, Menu } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 
 export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const router = useRouter();
   const { session, logout } = useAuth();
   const [query, setQuery] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const accountTriggerRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setMenuOpen(false);
-        accountTriggerRef.current?.focus();
-      }
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [menuOpen]);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,49 +54,41 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         />
       </form>
 
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-2">
         {/* live indicator */}
         <span className="hidden items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs font-medium text-muted sm:inline-flex">
           <span className="argus-pulse h-1.5 w-1.5 rounded-full bg-ok" />
           Live
         </span>
 
-        {/* account menu */}
-        <div className="relative" ref={menuRef}>
-          <button
-            ref={accountTriggerRef}
-            type="button"
-            aria-label="Account"
-            aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((open) => !open)}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-white transition-colors hover:bg-accent-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {initial}
-          </button>
-          {menuOpen ? (
-            <div className="argus-rise absolute right-0 top-11 z-30 w-64 rounded-xl border border-line bg-surface p-1.5 shadow-lg">
-              <div className="px-3 py-2.5">
-                <p className="truncate text-sm font-medium text-fg">
-                  {session?.email}
-                </p>
-                <div className="mt-1.5">
-                  <Badge tone="neutral">
-                    <span className="capitalize">{session?.role}</span>
-                  </Badge>
-                </div>
+        {/* theme toggle */}
+        <ThemeToggle />
+
+        {/* account menu — email + role as non-interactive header, then sign-out */}
+        <Menu
+          align="end"
+          triggerClassName="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-on-accent transition-colors hover:bg-accent-2"
+          trigger={initial}
+          header={
+            <div className="px-3 py-2.5">
+              <p className="truncate text-sm font-medium text-fg">
+                {session?.email}
+              </p>
+              <div className="mt-1.5">
+                <Badge tone="neutral">
+                  <span className="capitalize">{session?.role}</span>
+                </Badge>
               </div>
-              <div className="my-1 border-t border-line" />
-              <button
-                type="button"
-                onClick={logout}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <Icon name="logout" size={16} />
-                Sign out
-              </button>
             </div>
-          ) : null}
-        </div>
+          }
+          items={[
+            {
+              label: "Sign out",
+              icon: "logout",
+              onSelect: logout,
+            },
+          ]}
+        />
       </div>
     </header>
   );

@@ -478,14 +478,7 @@ export function VulnsView() {
       sortable: true,
       render: (v) => (
         <span className="inline-flex items-center gap-1.5">
-          {/* Keyboard path into the drawer */}
-          <button
-            type="button"
-            onClick={() => setSelectedId(v.cve_id)}
-            className="rounded text-left font-mono text-xs text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {v.cve_id}
-          </button>
+          <span className="font-mono text-xs text-fg">{v.cve_id}</span>
           <ButtonLink
             href={nvdUrl(v.cve_id)}
             target="_blank"
@@ -665,6 +658,7 @@ export function VulnsView() {
               }}
               selection={canTriage ? tableSelection : undefined}
               onSelectionChange={canTriage ? setTableSelection : undefined}
+              onRowClick={(v) => setSelectedId(v.cve_id)}
               density="compact"
               empty={
                 <EmptyState

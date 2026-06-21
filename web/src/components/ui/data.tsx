@@ -60,6 +60,7 @@ export function Table<Row>({
   onSortChange,
   selection,
   onSelectionChange,
+  onRowClick,
   density = "compact",
   empty,
   sticky,
@@ -71,6 +72,7 @@ export function Table<Row>({
   onSortChange?: (s: SortState) => void;
   selection?: Set<string>;
   onSelectionChange?: (s: Set<string>) => void;
+  onRowClick?: (row: Row) => void;
   density?: "compact" | "comfortable";
   empty?: React.ReactNode;
   sticky?: boolean;
@@ -170,13 +172,31 @@ export function Table<Row>({
           ) : (
             rows.map((r) => {
               const id = getRowId(r);
+              const clickable = Boolean(onRowClick);
               return (
                 <tr
                   key={id}
-                  className="border-t border-line hover:bg-surface-2/60"
+                  className={cx(
+                    "border-t border-line hover:bg-surface-2/60",
+                    clickable && "cursor-pointer",
+                  )}
+                  {...(clickable
+                    ? {
+                        tabIndex: 0,
+                        onClick: () => onRowClick!(r),
+                        onKeyDown: (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+                          if (e.key === "Enter") {
+                            onRowClick!(r);
+                          } else if (e.key === " ") {
+                            e.preventDefault();
+                            onRowClick!(r);
+                          }
+                        },
+                      }
+                    : {})}
                 >
                   {selectable && (
-                    <td className={pad}>
+                    <td className={pad} onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={selection!.has(id)}
                         onChange={() => toggleOne(id)}

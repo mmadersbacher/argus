@@ -7,7 +7,7 @@ export const buttonVariants: Record<
   "primary" | "secondary" | "ghost" | "danger",
   string
 > = {
-  primary: "bg-accent text-white hover:bg-accent-2",
+  primary: "bg-accent text-on-accent hover:bg-accent-2",
   secondary: "border border-line bg-surface text-fg hover:bg-surface-2",
   ghost: "text-fg-2 hover:bg-surface-2 hover:text-fg",
   danger: "bg-crit text-white hover:bg-crit/90",

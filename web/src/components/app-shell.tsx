@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/topbar";
 import { useAuth } from "@/lib/auth";
+import { CommandPalette } from "@/components/command-palette";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -21,6 +22,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const openNav = useCallback(() => setNavOpen(true), []);
   const closeNav = useCallback(() => setNavOpen(false), []);
+
+  // Command palette state
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // Global Cmd+K / Ctrl+K hotkey — toggles the command palette
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (ready && !session && !isLogin) router.replace("/login");
@@ -38,6 +55,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <TopBar onMenuClick={openNav} />
         <main className="flex-1 p-6 lg:p-8">{children}</main>
       </div>
+      <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>
   );
 }

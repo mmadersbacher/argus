@@ -254,7 +254,7 @@ export function Tooltip({
             ref={refs.setFloating}
             style={floatingStyles}
             {...getFloatingProps()}
-            className="z-50 max-w-xs rounded-md bg-fg px-2 py-1 text-xs text-white shadow-md"
+            className="z-50 max-w-xs rounded-md bg-fg px-2 py-1 text-xs text-bg shadow-md"
           >
             {content}
           </div>
@@ -272,10 +272,15 @@ export function Menu({
   trigger,
   items,
   align = "start",
+  header,
+  triggerClassName,
 }: {
   trigger: React.ReactNode;
   items: MenuItem[];
   align?: "start" | "end";
+  header?: React.ReactNode;
+  /** Overrides the trigger's VISUAL classes only; the focus ring is always applied by the primitive. */
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
@@ -301,9 +306,12 @@ export function Menu({
         ref={refs.setReference}
         {...getReferenceProps()}
         className={cx(
-          "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
           focusRing,
-          buttonVariants.secondary,
+          triggerClassName ??
+            cx(
+              "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
+              buttonVariants.secondary,
+            ),
         )}
       >
         {trigger}
@@ -319,6 +327,12 @@ export function Menu({
               {...getFloatingProps()}
               className="z-50 min-w-40 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg"
             >
+              {header ? (
+                <>
+                  {header}
+                  <div role="separator" className="my-1 border-t border-line" />
+                </>
+              ) : null}
               {items.map((it, i) =>
                 "separator" in it ? (
                   <div key={`separator-${i}`} role="separator" className="my-1 border-t border-line" />
