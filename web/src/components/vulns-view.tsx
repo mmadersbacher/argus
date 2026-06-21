@@ -271,10 +271,12 @@ function BulkSelectionTriage({
   cveIds,
   vulns,
   onChanged,
+  onClearSelection,
 }: {
   cveIds: string[];
   vulns: VulnRow[];
   onChanged: () => Promise<void>;
+  onClearSelection: () => void;
 }) {
   const { toast } = useToast();
   const [status, setStatus] = useState<FindingStatus>("acknowledged");
@@ -301,6 +303,7 @@ function BulkSelectionTriage({
       );
       setNote("");
       await onChanged();
+      onClearSelection();
       toast({ title: "Triage saved", tone: "ok" });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to apply";
@@ -364,7 +367,7 @@ function sortVulns(rows: VulnRow[], sort: SortState): VulnRow[] {
       case "kev":
         // true > false
         if (a.kev === b.kev) return 0;
-        return (a.kev ? -1 : 1) * dir;
+        return (a.kev ? 1 : -1) * dir;
       case "cvss": {
         const av = a.cvss ?? -1;
         const bv = b.cvss ?? -1;
@@ -675,6 +678,7 @@ export function VulnsView() {
                   cveIds={selectedCveIds}
                   vulns={vulns}
                   onChanged={reload}
+                  onClearSelection={() => setTableSelection(new Set())}
                 />
               </div>
             ) : null}
