@@ -43,7 +43,7 @@ function LinkedStatCard({
       aria-label={`${label}: ${typeof value === "number" ? value.toString() : String(value)}${hint ? ` — ${hint}` : ""}`}
     >
       {/* Hover ring to signal interactivity without overriding the StatCard layout */}
-      <div className="transition-shadow group-hover:shadow-[0_0_0_2px_var(--color-accent-muted,theme(colors.blue.400/20))]  rounded-xl">
+      <div className="transition-shadow group-hover:ring-2 group-hover:ring-accent/20 rounded-xl">
         <StatCard label={label} value={value} hint={hint} tone={tone} />
       </div>
     </Link>
