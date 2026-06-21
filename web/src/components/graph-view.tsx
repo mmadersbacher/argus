@@ -310,7 +310,7 @@ const DEFAULT_FILTERS: FilterState = {
 function deviceVisible(node: DeviceNode, f: FilterState): boolean {
   if (f.riskBand !== "all" && node.band !== f.riskBand) return false;
   if (f.assetType !== "all" && node.type !== f.assetType) return false;
-  if (f.hideUnscanned && !node.hasServices && node.band === "info") return false;
+  if (f.hideUnscanned && !node.hasServices) return false;
   if (f.hideInfo && node.band === "info") return false;
   return true;
 }

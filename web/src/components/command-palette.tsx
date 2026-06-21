@@ -92,7 +92,7 @@ function useCommands(): Command[] {
       // Actions
       {
         id: "action-scan",
-        label: "Start scan",
+        label: "Go to scan (Assets)",
         group: "Actions" as const,
         run: () => router.push("/assets"),
       },
@@ -224,7 +224,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                       className={
                         "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors " +
                         (isActive
-                          ? "bg-accent text-white"
+                          ? "bg-accent text-on-accent"
                           : "text-fg hover:bg-surface-2")
                       }
                     >

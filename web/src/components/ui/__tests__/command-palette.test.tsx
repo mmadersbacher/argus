@@ -67,7 +67,8 @@ test("ArrowDown moves selection from index 0 to index 1, Enter triggers second c
   // No filter — full list shown; index 0 = Overview (/), index 1 = Assets (/assets)
   // Confirm both first and second items are present in the unfiltered list
   expect(screen.getByRole("option", { name: /overview/i })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: /assets/i })).toBeInTheDocument();
+  // Use exact label "Assets" (not the action "Go to scan (Assets)")
+  expect(screen.getByRole("option", { name: "Assets" })).toBeInTheDocument();
 
   // ArrowDown in the input moves active index from 0 → 1
   await user.keyboard("{ArrowDown}");

@@ -67,7 +67,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         {/* account menu — email + role as non-interactive header, then sign-out */}
         <Menu
           align="end"
-          triggerClassName="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-white transition-colors hover:bg-accent-2"
+          triggerClassName="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-on-accent transition-colors hover:bg-accent-2"
           trigger={initial}
           header={
             <div className="px-3 py-2.5">

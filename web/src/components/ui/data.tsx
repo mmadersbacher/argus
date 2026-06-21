@@ -182,7 +182,6 @@ export function Table<Row>({
                   )}
                   {...(clickable
                     ? {
-                        role: "button" as const,
                         tabIndex: 0,
                         onClick: () => onRowClick!(r),
                         onKeyDown: (e: React.KeyboardEvent<HTMLTableRowElement>) => {

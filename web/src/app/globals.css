@@ -42,6 +42,7 @@
   --color-med: #b45309;
   --color-low: #0369a1;
   --color-info: #64748b;
+  --color-on-accent: #ffffff;
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -73,6 +74,7 @@
   --color-med: #facc15;
   --color-low: #4ade80;
   --color-info: #67e8f9;
+  --color-on-accent: #0b1220;
 }
 
 html,

@@ -13,6 +13,15 @@ const columns = [
   { key: "risk", header: "Risk", numeric: true },
 ];
 
+/** Helper: get the clickable body rows (skip the single header row). */
+function getBodyRows() {
+  // Native <tr> elements carry role="row"; filter to only body rows
+  // by excluding the header row (which has no tabIndex).
+  return screen.getAllByRole("row").filter(
+    (el) => el.tagName === "TR" && (el as HTMLElement).tabIndex === 0,
+  );
+}
+
 // (a) clicking a row calls onRowClick with that row's data
 test("clicking a row calls onRowClick with row data", async () => {
   const onRowClick = vi.fn();
@@ -24,10 +33,7 @@ test("clicking a row calls onRowClick with row data", async () => {
       onRowClick={onRowClick}
     />,
   );
-  // When onRowClick is set, body <tr>s get role="button"
-  const clickableRows = screen.getAllByRole("button").filter(
-    (el) => el.tagName === "TR",
-  );
+  const clickableRows = getBodyRows();
   expect(clickableRows).toHaveLength(2);
   await userEvent.click(clickableRows[0]);
   expect(onRowClick).toHaveBeenCalledTimes(1);
@@ -45,9 +51,7 @@ test("pressing Enter on a focused row calls onRowClick", async () => {
       onRowClick={onRowClick}
     />,
   );
-  const clickableRows = screen.getAllByRole("button").filter(
-    (el) => el.tagName === "TR",
-  );
+  const clickableRows = getBodyRows();
   expect(clickableRows).toHaveLength(2);
   clickableRows[1].focus();
   await userEvent.keyboard("{Enter}");
