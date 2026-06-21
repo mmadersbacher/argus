@@ -7,6 +7,7 @@ import {
   runScan,
   type AssetType,
   type RiskBand,
+  type ScoredAsset as Asset,
 } from "@/lib/api";
 import {
   assetTypeIcon,
@@ -19,16 +20,24 @@ import { useInventory } from "@/lib/use-inventory";
 import { Icon, type IconName } from "@/components/icon";
 import { RiskBadge } from "@/components/risk-badge";
 import { AssetDrawer } from "@/components/asset-drawer";
-import { EmptyState, ErrorState, LoadingState } from "@/components/states";
+import { EmptyState, ErrorState } from "@/components/states";
 import {
   Badge,
   Button,
+  Column,
   Field,
   Input,
   PageHeader,
+  Pagination,
   Panel,
+  SkeletonTable,
+  SortState,
+  Table,
   Toggle,
+  useToast,
 } from "@/components/ui";
+
+const PAGE_SIZE = 50;
 
 type Filter =
   | { kind: "type"; value: AssetType }
@@ -80,6 +89,7 @@ function GroupCard({
 
 export function AssetsView() {
   const { summary, assets, error, loading, reload } = useInventory();
+  const { toast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlQ = searchParams.get("q") ?? "";
@@ -88,10 +98,10 @@ export function AssetsView() {
   const [target, setTarget] = useState("127.0.0.1");
   const [deep, setDeep] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [scanNote, setScanNote] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter | null>(null);
   const [q, setQ] = useState(urlQ);
-  const [sortAsc, setSortAsc] = useState(false);
+  const [sort, setSort] = useState<SortState>({ key: "risk", dir: "desc" });
+  const [page, setPage] = useState(1);
   const [showScan, setShowScan] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
@@ -113,6 +123,7 @@ export function AssetsView() {
   // consistent without any nonce tricks.
   const onQueryChange = (value: string) => {
     setQ(value);
+    setPage(1);
     if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
       debounceRef.current = null;
@@ -137,6 +148,7 @@ export function AssetsView() {
       debounceRef.current = null;
     }
     setQ(urlQ);
+    setPage(1);
   }, [urlQ]);
 
   // Drawer selection holds only the id; the object is derived per render from
@@ -154,18 +166,23 @@ export function AssetsView() {
   const onScan = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setScanning(true);
-    setScanNote(null);
     try {
       const r = await runScan(target.trim() || "127.0.0.1", deep);
       await reload();
       if (mounted.current) {
-        setScanNote(
-          `${r.live} live · ${r.hosts_scanned} scanned · ${r.changes} change${r.changes === 1 ? "" : "s"} · ${r.duration_ms} ms`,
-        );
+        toast({
+          title: "Scan started",
+          description: `${r.live} live · ${r.hosts_scanned} scanned · ${r.changes} change${r.changes === 1 ? "" : "s"} · ${r.duration_ms} ms`,
+          tone: "ok",
+        });
       }
     } catch (err) {
       if (mounted.current) {
-        setScanNote(err instanceof Error ? err.message : "scan failed");
+        toast({
+          title: "Scan failed",
+          description: err instanceof Error ? err.message : "scan failed",
+          tone: "danger",
+        });
       }
     } finally {
       if (mounted.current) setScanning(false);
@@ -175,32 +192,48 @@ export function AssetsView() {
   const onImport = async (file: File) => {
     const MAX_IMPORT_BYTES = 20 * 1024 * 1024; // 20 MB — guard against reading a huge file into memory
     if (file.size > MAX_IMPORT_BYTES) {
-      setScanNote(
-        `file too large (${(file.size / 1_048_576).toFixed(1)} MB; max 20 MB)`,
-      );
+      toast({
+        title: "Scan failed",
+        description: `file too large (${(file.size / 1_048_576).toFixed(1)} MB; max 20 MB)`,
+        tone: "danger",
+      });
       return;
     }
     setScanning(true);
-    setScanNote(null);
     try {
       const xml = await file.text();
       const r = await importNmap(xml);
       await reload();
       if (mounted.current) {
-        setScanNote(
-          `imported ${r.imported} host${r.imported === 1 ? "" : "s"} from nmap XML`,
-        );
+        toast({
+          title: "Scan started",
+          description: `imported ${r.imported} host${r.imported === 1 ? "" : "s"} from nmap XML`,
+          tone: "ok",
+        });
       }
     } catch (err) {
       if (mounted.current) {
-        setScanNote(err instanceof Error ? err.message : "import failed");
+        toast({
+          title: "Scan failed",
+          description: err instanceof Error ? err.message : "import failed",
+          tone: "danger",
+        });
       }
     } finally {
       if (mounted.current) setScanning(false);
     }
   };
 
-  if (loading) return <LoadingState />;
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="argus-rise">
+          <PageHeader title="Assets" description="Loading inventory…" />
+        </div>
+        <SkeletonTable rows={8} cols={6} />
+      </div>
+    );
+  }
   if (error) return <ErrorState message={error} />;
 
   const byType = (Object.keys(assetTypeLabel) as AssetType[])
@@ -228,9 +261,41 @@ export function AssetsView() {
         ),
     );
   }
-  list = [...list].sort((a, b) =>
-    sortAsc ? a.risk.value - b.risk.value : b.risk.value - a.risk.value,
-  );
+
+  // Client-side sort
+  list = [...list].sort((a, b) => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    switch (sort.key) {
+      case "risk":
+        return dir * (a.risk.value - b.risk.value);
+      case "name":
+        return (
+          dir *
+          (a.fingerprint.device_type ?? "").localeCompare(
+            b.fingerprint.device_type ?? "",
+          )
+        );
+      case "type":
+        return (
+          dir *
+          assetTypeLabel[a.asset_type].localeCompare(
+            assetTypeLabel[b.asset_type],
+          )
+        );
+      case "address": {
+        const ia = a.interfaces.find((i) => i.ip) ?? a.interfaces[0];
+        const ib = b.interfaces.find((i) => i.ip) ?? b.interfaces[0];
+        return dir * (ia?.ip ?? "").localeCompare(ib?.ip ?? "");
+      }
+      default:
+        return 0;
+    }
+  });
+
+  // Pagination
+  const pageCount = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const pageRows = list.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const filterLabel =
     filter?.kind === "type"
@@ -240,6 +305,109 @@ export function AssetsView() {
         : null;
 
   const total = summary?.total_assets ?? assets.length;
+
+  // Column definitions
+  const columns: Column<Asset>[] = [
+    {
+      key: "name",
+      header: "Asset",
+      sortable: true,
+      render: (a) => {
+        const sub = [a.fingerprint.vendor, a.fingerprint.os]
+          .filter(Boolean)
+          .join(" · ");
+        return (
+          <div className="flex items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
+              <Icon name={assetTypeIcon[a.asset_type]} size={16} />
+            </span>
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => setSelectedId(a.id)}
+                className="block max-w-full truncate rounded text-left font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {a.fingerprint.device_type ?? "Unknown device"}
+              </button>
+              <div className="truncate text-xs text-muted">{sub || "—"}</div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "type",
+      header: "Type",
+      sortable: true,
+      render: (a) => <Badge>{assetTypeLabel[a.asset_type]}</Badge>,
+    },
+    {
+      key: "address",
+      header: "Address",
+      sortable: true,
+      render: (a) => {
+        const iface = a.interfaces.find((i) => i.ip) ?? a.interfaces[0];
+        return (
+          <div className="font-mono text-xs">
+            <div className="text-fg">{iface?.ip ?? "—"}</div>
+            {iface?.mac ? (
+              <div className="text-muted">{iface.mac}</div>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "exposure",
+      header: "Exposure",
+      render: (a) => (
+        <span
+          className={
+            a.exposure === "internet_facing"
+              ? "font-medium text-warn"
+              : "text-fg-2"
+          }
+        >
+          {exposureLabel[a.exposure]}
+        </span>
+      ),
+    },
+    {
+      key: "services",
+      header: "Services",
+      render: (a) => (
+        <span className="font-mono text-xs text-muted">
+          {a.services.length === 0
+            ? "—"
+            : a.services
+                .slice(0, 5)
+                .map((s) => s.port)
+                .join(", ") +
+              (a.services.length > 5 ? ` +${a.services.length - 5}` : "")}
+        </span>
+      ),
+    },
+    {
+      key: "risk",
+      header: "Risk",
+      sortable: true,
+      numeric: true,
+      render: (a) => (
+        <div className="flex flex-col items-end gap-1">
+          <RiskBadge band={a.risk.band} value={a.risk.value} />
+          {a.vulnerabilities.length > 0 ? (
+            <div className="text-[11px] tabular-nums text-muted">
+              {a.vulnerabilities.length} CVE
+              {a.vulnerabilities.length > 1 ? "s" : ""}
+              {a.vulnerabilities.some((v) => v.kev) ? (
+                <span className="ml-1 font-medium text-crit">KEV</span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -311,9 +479,6 @@ export function AssetsView() {
               }}
             />
           </form>
-          {scanNote ? (
-            <p className="mt-3 text-xs tabular-nums text-muted">{scanNote}</p>
-          ) : null}
         </Panel>
       ) : null}
 
@@ -337,13 +502,14 @@ export function AssetsView() {
               title={assetTypeLabel[t]}
               count={n}
               active={filter?.kind === "type" && filter.value === t}
-              onClick={() =>
+              onClick={() => {
                 setFilter(
                   filter?.kind === "type" && filter.value === t
                     ? null
                     : { kind: "type", value: t },
-                )
-              }
+                );
+                setPage(1);
+              }}
             />
           ))}
         </div>
@@ -369,13 +535,14 @@ export function AssetsView() {
               title={`${bandStyles[b].label} risk`}
               count={n}
               active={filter?.kind === "band" && filter.value === b}
-              onClick={() =>
+              onClick={() => {
                 setFilter(
                   filter?.kind === "band" && filter.value === b
                     ? null
                     : { kind: "band", value: b },
-                )
-              }
+                );
+                setPage(1);
+              }}
             />
           ))}
         </div>
@@ -391,7 +558,10 @@ export function AssetsView() {
                 {filterLabel}
                 <button
                   type="button"
-                  onClick={() => setFilter(null)}
+                  onClick={() => {
+                    setFilter(null);
+                    setPage(1);
+                  }}
                   aria-label="Clear filter"
                   className="rounded-full transition-colors hover:text-accent-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 >
@@ -407,126 +577,36 @@ export function AssetsView() {
                 aria-label="Filter assets"
               />
             </div>
-            <Button
-              variant="secondary"
-              onClick={() => setSortAsc((v) => !v)}
-              aria-label={`Sort by risk, ${sortAsc ? "ascending" : "descending"}`}
-            >
-              Risk
-              <span
-                className={`transition-transform ${sortAsc ? "rotate-180" : ""}`}
-              >
-                <Icon name="chevron" size={14} />
-              </span>
-            </Button>
           </>
         }
         bodyClassName="p-0"
       >
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-line bg-surface-2/60 text-left text-xs text-muted">
-                <th className="px-4 py-3 font-medium">Asset</th>
-                <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 font-medium">Address</th>
-                <th className="px-4 py-3 font-medium">Exposure</th>
-                <th className="px-4 py-3 font-medium">Services</th>
-                <th className="px-4 py-3 text-right font-medium">Risk</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((a) => {
-                const iface = a.interfaces.find((i) => i.ip) ?? a.interfaces[0];
-                const sub = [a.fingerprint.vendor, a.fingerprint.os]
-                  .filter(Boolean)
-                  .join(" · ");
-                return (
-                  <tr
-                    key={a.id}
-                    onClick={() => setSelectedId(a.id)}
-                    className="cursor-pointer border-b border-line transition-colors last:border-0 hover:bg-surface-2/60"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
-                          <Icon name={assetTypeIcon[a.asset_type]} size={16} />
-                        </span>
-                        <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedId(a.id)}
-                            className="block max-w-full truncate rounded text-left font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          >
-                            {a.fingerprint.device_type ?? "Unknown device"}
-                          </button>
-                          <div className="truncate text-xs text-muted">
-                            {sub || "—"}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge>{assetTypeLabel[a.asset_type]}</Badge>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs">
-                      <div className="text-fg">{iface?.ip ?? "—"}</div>
-                      {iface?.mac ? (
-                        <div className="text-muted">{iface.mac}</div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={
-                          a.exposure === "internet_facing"
-                            ? "font-medium text-warn"
-                            : "text-fg-2"
-                        }
-                      >
-                        {exposureLabel[a.exposure]}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted">
-                      {a.services.length === 0
-                        ? "—"
-                        : a.services
-                            .slice(0, 5)
-                            .map((s) => s.port)
-                            .join(", ") +
-                          (a.services.length > 5
-                            ? ` +${a.services.length - 5}`
-                            : "")}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <RiskBadge band={a.risk.band} value={a.risk.value} />
-                      {a.vulnerabilities.length > 0 ? (
-                        <div className="mt-1 text-[11px] tabular-nums text-muted">
-                          {a.vulnerabilities.length} CVE
-                          {a.vulnerabilities.length > 1 ? "s" : ""}
-                          {a.vulnerabilities.some((v) => v.kev) ? (
-                            <span className="ml-1 font-medium text-crit">
-                              KEV
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
-              {list.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>
-                    <EmptyState
-                      title="No assets match"
-                      hint="Adjust the search or clear the active filter to see the full inventory."
-                    />
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <Table<Asset>
+          columns={columns}
+          rows={pageRows}
+          getRowId={(a) => a.id}
+          sort={sort}
+          onSortChange={(s) => {
+            setSort(s);
+            setPage(1);
+          }}
+          density="compact"
+          empty={
+            <EmptyState
+              title="No assets match"
+              hint="Adjust the search or clear the active filter to see the full inventory."
+            />
+          }
+        />
+        {pageCount > 1 ? (
+          <div className="border-t border-line px-4 py-3">
+            <Pagination
+              page={safePage}
+              pageCount={pageCount}
+              onPageChange={setPage}
+            />
+          </div>
+        ) : null}
       </Panel>
 
       <AssetDrawer asset={selected} onClose={() => setSelectedId(null)} onUpdated={reload} />
