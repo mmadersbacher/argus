@@ -192,8 +192,12 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
       title="Continuous monitoring"
       description="Re-scan a target on a schedule; differences show up as events in the activity feed."
     >
-      <form onSubmit={save} className="space-y-4" aria-describedby={error ? "monitor-error" : undefined}>
-        {error && <FormError id="monitor-error">{error}</FormError>}
+      <form onSubmit={save} className="space-y-4">
+        {error && (
+          <div id="monitor-error" role="alert">
+            <FormError>{error}</FormError>
+          </div>
+        )}
 
         <Toggle
           checked={enabled}
@@ -367,13 +371,16 @@ function WebhookPanel() {
   };
 
   const copySecret = () => {
-    if (secret) {
-      void navigator.clipboard.writeText(secret).then(() => {
-        toast({ title: "Secret copied to clipboard.", tone: "ok" });
-      }).catch(() => {
-        toast({ title: "Failed to copy secret.", tone: "danger" });
-      });
+    if (!secret) return;
+    if (!navigator.clipboard) {
+      toast({ title: "Copy failed", tone: "danger" });
+      return;
     }
+    void navigator.clipboard.writeText(secret).then(() => {
+      toast({ title: "Secret copied to clipboard.", tone: "ok" });
+    }).catch(() => {
+      toast({ title: "Failed to copy secret.", tone: "danger" });
+    });
   };
 
   return (
@@ -391,8 +398,12 @@ function WebhookPanel() {
         tone="danger"
         busy={busy}
       />
-      <form onSubmit={save} className="space-y-4" aria-describedby={error ? "webhook-error" : undefined}>
-        {error && <FormError id="webhook-error">{error}</FormError>}
+      <form onSubmit={save} className="space-y-4">
+        {error && (
+          <div id="webhook-error" role="alert">
+            <FormError>{error}</FormError>
+          </div>
+        )}
 
         <Toggle
           checked={enabled}
@@ -476,6 +487,7 @@ export default function Page() {
   const [newKeyRole, setNewKeyRole] = useState<Role>("analyst");
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revoking, setRevoking] = useState(false);
   const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);
 
   const { toast } = useToast();
@@ -540,6 +552,7 @@ export default function Page() {
 
   const revokeKey = async (id: string) => {
     setPendingRevokeId(null);
+    setRevoking(true);
     try {
       await deleteApiKey(id);
       // Clear the one-time banner so a revoked key's plaintext isn't left on screen.
@@ -550,17 +563,22 @@ export default function Page() {
       const msg = err instanceof Error ? err.message : "failed to revoke key";
       setError(msg);
       toast({ title: "Failed to revoke API key.", description: msg, tone: "danger" });
+    } finally {
+      setRevoking(false);
     }
   };
 
   const copyCreatedKey = () => {
-    if (createdKey) {
-      void navigator.clipboard.writeText(createdKey).then(() => {
-        toast({ title: "API key copied to clipboard.", tone: "ok" });
-      }).catch(() => {
-        toast({ title: "Failed to copy API key.", tone: "danger" });
-      });
+    if (!createdKey) return;
+    if (!navigator.clipboard) {
+      toast({ title: "Copy failed", tone: "danger" });
+      return;
     }
+    void navigator.clipboard.writeText(createdKey).then(() => {
+      toast({ title: "API key copied to clipboard.", tone: "ok" });
+    }).catch(() => {
+      toast({ title: "Failed to copy API key.", tone: "danger" });
+    });
   };
 
   const roleSelect = (
@@ -602,6 +620,7 @@ export default function Page() {
         body="This key will stop working immediately. Any integrations using it will break."
         confirmLabel="Revoke"
         tone="danger"
+        busy={revoking}
       />
 
       <div className="space-y-6">
@@ -618,7 +637,11 @@ export default function Page() {
           </Panel>
         ) : (
           <>
-            {error && <FormError id="admin-error">{error}</FormError>}
+            {error && (
+              <div id="admin-error" role="alert">
+                <FormError>{error}</FormError>
+              </div>
+            )}
 
             <WebhookPanel />
 
@@ -661,7 +684,6 @@ export default function Page() {
               <form
                 onSubmit={addUser}
                 className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3"
-                aria-describedby={error ? "admin-error" : undefined}
               >
                 <div className="min-w-52 flex-1">
                   <Input
@@ -766,7 +788,6 @@ export default function Page() {
               <form
                 onSubmit={addKey}
                 className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3"
-                aria-describedby={error ? "admin-error" : undefined}
               >
                 <div className="min-w-52 flex-1">
                   <Input

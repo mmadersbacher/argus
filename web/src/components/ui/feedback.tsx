@@ -3,9 +3,9 @@
 import { cx } from "./internal";
 
 /** Inline form error note — shared by settings and login. */
-export function FormError({ id, children }: { id?: string; children: React.ReactNode }) {
+export function FormError({ children }: { children: React.ReactNode }) {
   return (
-    <div id={id} role="alert" className="rounded-lg border border-crit/30 bg-crit/5 px-3 py-2 text-sm text-crit">
+    <div className="rounded-lg border border-crit/30 bg-crit/5 px-3 py-2 text-sm text-crit">
       {children}
     </div>
   );
