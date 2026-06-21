@@ -29,7 +29,7 @@ export function BrandTile({
 }: { size?: number; markSize?: number } = {}) {
   return (
     <div
-      className="flex items-center justify-center rounded-xl bg-gradient-to-br from-[#3b82f6] to-[#1e3a8a] text-white shadow-lg shadow-black/40 ring-1 ring-white/15"
+      className="flex items-center justify-center rounded-xl bg-gradient-to-br from-[var(--color-brand-from)] to-[var(--color-brand-to)] text-white shadow-lg shadow-black/40 ring-1 ring-white/15"
       style={{ width: size, height: size }}
     >
       <ArgusMark size={markSize} />

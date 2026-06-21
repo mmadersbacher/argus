@@ -19,6 +19,8 @@
   --color-faint: #98a2b3; /* decorative only (separators, em-dashes) — real content and interactive elements use muted */
 
   /* brand & semantic */
+  --color-brand-from: #3b82f6; /* argus mark gradient start */
+  --color-brand-to: #1e3a8a; /* argus mark gradient end */
   --color-accent: #2563eb; /* royal blue — primary actions, active nav, links */
   --color-accent-2: #1d4ed8; /* hover */
   --color-accent-soft: #eff4ff; /* soft accent fills */
@@ -82,6 +84,9 @@ body {
 .argus-slide {
   animation: argus-slide 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+@keyframes argus-spin { to { transform: rotate(360deg); } }
+.argus-spin { animation: argus-spin 0.7s linear infinite; transform-origin: center; }
 
 /* ---- print: render only the report sheet ------------------------------------
    The Reports page wraps its printable content in #report-print. Everything
