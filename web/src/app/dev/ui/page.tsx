@@ -13,6 +13,7 @@ import {
   Tabs,
   TabPanel,
   Pagination,
+  Tooltip,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -173,6 +174,22 @@ export default function UiGallery() {
           pageCount={5}
           onPageChange={setCurrentPage}
         />
+      </Panel>
+      <Panel title="Tooltip">
+        <div className="flex gap-6 items-center flex-wrap">
+          <Tooltip content="Top tooltip (default)">
+            <Button variant="secondary">Hover / focus me</Button>
+          </Tooltip>
+          <Tooltip content="Right-side tooltip" side="right">
+            <Button variant="secondary">Right</Button>
+          </Tooltip>
+          <Tooltip content="Bottom tooltip" side="bottom">
+            <Button variant="secondary">Bottom</Button>
+          </Tooltip>
+          <Tooltip content="Left tooltip" side="left">
+            <Button variant="secondary">Left</Button>
+          </Tooltip>
+        </div>
       </Panel>
     </div>
   );

@@ -1,6 +1,18 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import {
+  useFloating,
+  autoUpdate,
+  offset,
+  flip,
+  shift,
+  useHover,
+  useFocus,
+  useDismiss as useFloatingDismiss,
+  useRole,
+  useInteractions,
+} from "@floating-ui/react";
 import { Icon } from "@/components/icon";
 import { cx, focusRing } from "./internal";
 import { useDismiss, useFocusTrap } from "./overlay-core";
@@ -91,5 +103,54 @@ export function Drawer({
         ) : null}
       </aside>
     </div>
+  );
+}
+
+/** Lightweight tooltip — wraps a single focusable child; shows on hover/focus.
+ *  Positioned via Floating UI with flip/shift/offset middleware. */
+export function Tooltip({
+  content,
+  side = "top",
+  children,
+}: {
+  content: React.ReactNode;
+  side?: "top" | "right" | "bottom" | "left";
+  children: React.ReactElement;
+}) {
+  const [open, setOpen] = useState(false);
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange: setOpen,
+    placement: side,
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(6), flip(), shift({ padding: 6 })],
+  });
+  const hover = useHover(context, { move: false });
+  const focus = useFocus(context);
+  const dismiss = useFloatingDismiss(context);
+  const role = useRole(context, { role: "tooltip" });
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+    dismiss,
+    role,
+  ]);
+
+  return (
+    <>
+      <span ref={refs.setReference} {...getReferenceProps()} className="inline-flex">
+        {children}
+      </span>
+      {open && (
+        <div
+          ref={refs.setFloating}
+          style={floatingStyles}
+          {...getFloatingProps()}
+          className="z-50 max-w-xs rounded-md bg-fg px-2 py-1 text-xs text-white shadow-md"
+        >
+          {content}
+        </div>
+      )}
+    </>
   );
 }
