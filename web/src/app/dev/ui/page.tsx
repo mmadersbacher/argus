@@ -15,6 +15,7 @@ import {
   Pagination,
   Tooltip,
   Menu,
+  ConfirmDialog,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -25,6 +26,8 @@ export default function UiGallery() {
   const [radioValue, setRadioValue] = useState("option1");
   const [activeTab, setActiveTab] = useState("tab1");
   const [currentPage, setCurrentPage] = useState(1);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmed, setConfirmed] = useState<boolean | null>(null);
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -221,6 +224,27 @@ export default function UiGallery() {
             ]}
           />
         </div>
+      </Panel>
+      <Panel title="ConfirmDialog">
+        <div className="flex items-center gap-4">
+          <Button variant="danger" onClick={() => setConfirmOpen(true)}>
+            Revoke API key…
+          </Button>
+          {confirmed !== null && (
+            <p className="text-sm text-muted">
+              Last action: {confirmed ? "confirmed" : "cancelled"}
+            </p>
+          )}
+        </div>
+        <ConfirmDialog
+          open={confirmOpen}
+          title="Revoke API key?"
+          body="This will permanently revoke the key. Any integrations using it will stop working immediately."
+          confirmLabel="Revoke"
+          tone="danger"
+          onConfirm={() => { setConfirmed(true); setConfirmOpen(false); }}
+          onCancel={() => { setConfirmed(false); setConfirmOpen(false); }}
+        />
       </Panel>
     </div>
   );

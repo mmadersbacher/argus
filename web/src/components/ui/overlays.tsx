@@ -17,8 +17,110 @@ import {
 } from "@floating-ui/react";
 import { Icon, type IconName } from "@/components/icon";
 import { cx, focusRing } from "./internal";
-import { useDismiss, useFocusTrap } from "./overlay-core";
-import { buttonVariants } from "./controls";
+import { Portal, useDismiss, useFocusTrap } from "./overlay-core";
+import { Button, buttonVariants } from "./controls";
+
+const modalSizes = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg" };
+
+export function Modal({
+  onClose,
+  title,
+  description,
+  size = "md",
+  children,
+  footer,
+}: {
+  onClose: () => void;
+  title: string;
+  description?: string;
+  size?: "sm" | "md" | "lg";
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const trap = useFocusTrap(ref);
+  useDismiss(onClose);
+  return (
+    <Portal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="absolute inset-0 bg-fg/40"
+        />
+        <div
+          ref={ref}
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          onKeyDown={trap}
+          className={cx(
+            "argus-rise relative w-full rounded-xl border border-line bg-surface shadow-xl",
+            modalSizes[size],
+          )}
+        >
+          <div className="border-b border-line px-5 py-4">
+            <h2 className="text-base font-semibold text-fg">{title}</h2>
+            {description ? (
+              <p className="mt-1 text-sm text-muted">{description}</p>
+            ) : null}
+          </div>
+          <div className="px-5 py-4">{children}</div>
+          {footer ? (
+            <div className="flex justify-end gap-2 border-t border-line px-5 py-4">
+              {footer}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+export function ConfirmDialog({
+  open,
+  onConfirm,
+  onCancel,
+  title,
+  body,
+  confirmLabel = "Confirm",
+  tone = "primary",
+  busy,
+}: {
+  open: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  title: string;
+  body: React.ReactNode;
+  confirmLabel?: string;
+  tone?: "danger" | "primary";
+  busy?: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <Modal
+      onClose={onCancel}
+      title={title}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant={tone === "danger" ? "danger" : "primary"}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-fg-2">{body}</p>
+    </Modal>
+  );
+}
 
 /** Right-hand slide-over dialog — the one drawer shell for asset and CVE
  *  details. Owns the full modal contract: backdrop, Escape, focus trap,
