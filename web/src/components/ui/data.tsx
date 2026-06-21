@@ -96,15 +96,10 @@ export function Table<Row>({
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
-        <thead
-          className={cx(
-            "bg-surface-2 text-left text-muted",
-            sticky && "sticky top-0 z-10",
-          )}
-        >
+        <thead className="bg-surface-2 text-left text-muted">
           <tr>
             {selectable && (
-              <th className={cx(pad, "w-10")}>
+              <th className={cx(pad, "w-10", sticky && "sticky top-0 z-10 bg-surface-2")}>
                 <Checkbox
                   checked={allSelected}
                   onChange={toggleAll}
@@ -131,6 +126,7 @@ export function Table<Row>({
                     c.numeric || c.align === "right"
                       ? "text-right"
                       : "text-left",
+                    sticky && "sticky top-0 z-10 bg-surface-2",
                   )}
                 >
                   {c.sortable && onSortChange ? (
