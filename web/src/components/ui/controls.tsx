@@ -84,6 +84,23 @@ export function Field({
   );
 }
 
+export function Textarea({
+  className,
+  rows = 4,
+  ...rest
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      rows={rows}
+      className={cx(
+        "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg transition-colors placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-50",
+        className,
+      )}
+      {...rest}
+    />
+  );
+}
+
 export function Toggle({
   checked,
   onChange,
