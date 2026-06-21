@@ -6,7 +6,7 @@
 // print CSS in globals.css renders only #report-print.
 
 import { useState } from "react";
-import type { HighlightLevel } from "@/lib/api";
+import type { HighlightLevel, ReportTopAsset, ReportTopCve } from "@/lib/api";
 import { useReport } from "@/lib/use-report";
 import {
   assetTypeLabel,
@@ -23,9 +23,14 @@ import {
   Panel,
   Select,
   StatCard,
+  type Column,
+  type SortState,
+  Table,
+  SkeletonTable,
+  Tooltip,
 } from "@/components/ui";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
-import { ErrorState, LoadingState } from "@/components/states";
+import { ErrorState } from "@/components/states";
 
 const levelTone: Record<HighlightLevel, "danger" | "warn" | "info"> = {
   critical: "danger",
@@ -46,15 +51,229 @@ const criticalityLabel: Record<string, string> = {
   critical: "Critical",
 };
 
-const th =
-  "px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted";
-const td = "px-4 py-3";
+// ── Sort helpers ─────────────────────────────────────────────────────────────
+
+function sortAssets(
+  rows: ReportTopAsset[],
+  s: SortState,
+): ReportTopAsset[] {
+  return [...rows].sort((a, b) => {
+    let av: number | null = null;
+    let bv: number | null = null;
+    if (s.key === "risk") {
+      av = a.risk.value;
+      bv = b.risk.value;
+    } else if (s.key === "cves") {
+      av = a.cves;
+      bv = b.cves;
+    } else if (s.key === "kev_cves") {
+      av = a.kev_cves;
+      bv = b.kev_cves;
+    }
+    // string columns
+    if (av === null && bv === null) return 0;
+    // nulls last regardless of direction
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return s.dir === "asc" ? av - bv : bv - av;
+  });
+}
+
+function sortCves(
+  rows: ReportTopCve[],
+  s: SortState,
+): ReportTopCve[] {
+  return [...rows].sort((a, b) => {
+    // KEV-first tiebreaker preserved when sorting by other columns
+    if (s.key === "kev") {
+      const ak = a.kev ? 1 : 0;
+      const bk = b.kev ? 1 : 0;
+      return s.dir === "asc" ? ak - bk : bk - ak;
+    }
+    let av: number | null = null;
+    let bv: number | null = null;
+    if (s.key === "cvss") {
+      av = a.cvss;
+      bv = b.cvss;
+    } else if (s.key === "epss") {
+      av = a.epss;
+      bv = b.epss;
+    } else if (s.key === "affected") {
+      av = a.affected;
+      bv = b.affected;
+    }
+    if (av === null && bv === null) {
+      // tiebreak: KEV first
+      return (b.kev ? 1 : 0) - (a.kev ? 1 : 0);
+    }
+    if (av === null) return 1;  // nulls last
+    if (bv === null) return -1;
+    const cmp = s.dir === "asc" ? av - bv : bv - av;
+    if (cmp !== 0) return cmp;
+    // tiebreak: KEV first
+    return (b.kev ? 1 : 0) - (a.kev ? 1 : 0);
+  });
+}
+
+// ── Column definitions ────────────────────────────────────────────────────────
+
+const assetColumns: Column<ReportTopAsset>[] = [
+  {
+    key: "name",
+    header: "Asset",
+    render: (a) => (
+      <>
+        <span className="font-medium text-fg">{a.name}</span>
+        {a.ip && a.ip !== a.name ? (
+          <span className="ml-2 font-mono text-xs text-muted">{a.ip}</span>
+        ) : null}
+      </>
+    ),
+  },
+  {
+    key: "asset_type",
+    header: "Type",
+    render: (a) => <span className="text-fg-2">{assetTypeLabel[a.asset_type]}</span>,
+  },
+  {
+    key: "exposure",
+    header: "Exposure",
+    render: (a) => <span className="text-fg-2">{exposureLabel[a.exposure]}</span>,
+  },
+  {
+    key: "cves",
+    header: "CVEs",
+    numeric: true,
+    sortable: true,
+    render: (a) => <span className="tabular-nums">{a.cves}</span>,
+  },
+  {
+    key: "kev_cves",
+    header: "KEV",
+    sortable: true,
+    render: (a) =>
+      a.kev_cves > 0 ? (
+        <Badge tone="danger">{a.kev_cves} KEV</Badge>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    key: "risk",
+    header: "Risk",
+    sortable: true,
+    render: (a) => <RiskBadge band={a.risk.band} value={a.risk.value} />,
+  },
+];
+
+const cveColumns: Column<ReportTopCve>[] = [
+  {
+    key: "cve_id",
+    header: "CVE",
+    render: (v) => (
+      <span className="font-mono text-xs text-fg">{v.cve_id}</span>
+    ),
+  },
+  {
+    key: "severity",
+    header: "Severity",
+    render: (v) => <SeverityBadge severity={v.severity} />,
+  },
+  {
+    key: "cvss",
+    header: "CVSS",
+    numeric: true,
+    sortable: true,
+    render: (v) => <span className="tabular-nums">{formatCvss(v.cvss)}</span>,
+  },
+  {
+    key: "epss",
+    header: "EPSS",
+    numeric: true,
+    sortable: true,
+    render: (v) => <span className="tabular-nums">{formatEpss(v.epss)}</span>,
+  },
+  {
+    key: "kev",
+    header: "KEV",
+    sortable: true,
+    render: (v) =>
+      v.kev ? (
+        <Badge tone="danger">KEV</Badge>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    key: "affected",
+    header: "Affected",
+    numeric: true,
+    sortable: true,
+    render: (v) => <span className="tabular-nums">{v.affected}</span>,
+  },
+];
+
+// ── Loading skeleton shaped for the reports page ──────────────────────────────
+
+function ReportsSkeleton() {
+  return (
+    <div role="status" className="animate-pulse space-y-6">
+      {/* letterhead */}
+      <div aria-hidden="true" className="rounded-xl border border-line bg-surface p-5">
+        <div className="h-5 w-52 rounded bg-line/70" />
+        <div className="mt-2 h-3 w-36 rounded bg-line/40" />
+      </div>
+      {/* highlights */}
+      <div aria-hidden="true" className="rounded-xl border border-line bg-surface p-5 space-y-2.5">
+        <div className="h-4 w-40 rounded bg-line/70" />
+        {[80, 95, 70].map((w, i) => (
+          <div key={i} className="h-4 rounded bg-line/40" style={{ width: `${w}%` }} />
+        ))}
+      </div>
+      {/* stat cards */}
+      <div aria-hidden="true" className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="rounded-xl border border-line bg-surface p-5">
+            <div className="h-3 w-20 rounded bg-line/70" />
+            <div className="mt-3 h-7 w-16 rounded-md bg-line/40" />
+          </div>
+        ))}
+      </div>
+      {/* two-col panels */}
+      <div aria-hidden="true" className="grid gap-6 lg:grid-cols-2">
+        {[1, 2].map((i) => (
+          <div key={i} className="rounded-xl border border-line bg-surface p-5 space-y-3">
+            <div className="h-4 w-36 rounded bg-line/70" />
+            <SkeletonTable rows={5} cols={2} />
+          </div>
+        ))}
+      </div>
+      {/* top-risk assets table */}
+      <div aria-hidden="true" className="rounded-xl border border-line bg-surface p-5 space-y-3">
+        <div className="h-4 w-44 rounded bg-line/70" />
+        <SkeletonTable rows={10} cols={6} />
+      </div>
+      {/* top CVEs table */}
+      <div aria-hidden="true" className="rounded-xl border border-line bg-surface p-5 space-y-3">
+        <div className="h-4 w-52 rounded bg-line/70" />
+        <SkeletonTable rows={10} cols={6} />
+      </div>
+      <span className="sr-only">Loading report…</span>
+    </div>
+  );
+}
+
+// ── Main view ─────────────────────────────────────────────────────────────────
 
 export function ReportsView() {
   const [days, setDays] = useState(30);
   const { report, error, loading } = useReport(days);
 
-  if (loading && !report) return <LoadingState />;
+  // Sort state: assets default desc by risk; CVEs default desc by CVSS (KEV-first is a tiebreaker)
+  const [assetSort, setAssetSort] = useState<SortState>({ key: "risk", dir: "desc" });
+  const [cveSort, setCveSort] = useState<SortState>({ key: "cvss", dir: "desc" });
+
+  if (loading && !report) return <ReportsSkeleton />;
   if (error && !report) return <ErrorState message={error} />;
   if (!report) return null;
 
@@ -65,6 +284,9 @@ export function ReportsView() {
   const inv = report.inventory;
   const vulns = report.vulnerabilities;
   const distributionTotal = Math.max(1, inv.total);
+
+  const sortedAssets = sortAssets(report.risk.top_assets, assetSort);
+  const sortedCves = sortCves(vulns.top_cves, cveSort);
 
   return (
     <div>
@@ -229,52 +451,15 @@ export function ReportsView() {
           {report.risk.top_assets.length === 0 ? (
             <p className="px-5 py-4 text-sm text-muted">No assets yet.</p>
           ) : (
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-line">
-                  <th className={th}>Asset</th>
-                  <th className={th}>Type</th>
-                  <th className={th}>Exposure</th>
-                  <th className={th}>CVEs</th>
-                  <th className={th}>KEV</th>
-                  <th className={th}>Risk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.risk.top_assets.map((a) => (
-                  <tr
-                    key={`${a.name}-${a.ip ?? ""}`}
-                    className="border-b border-line last:border-0"
-                  >
-                    <td className={td}>
-                      <span className="font-medium text-fg">{a.name}</span>
-                      {a.ip && a.ip !== a.name ? (
-                        <span className="ml-2 font-mono text-xs text-muted">
-                          {a.ip}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className={`${td} text-fg-2`}>
-                      {assetTypeLabel[a.asset_type]}
-                    </td>
-                    <td className={`${td} text-fg-2`}>
-                      {exposureLabel[a.exposure]}
-                    </td>
-                    <td className={`${td} tabular-nums`}>{a.cves}</td>
-                    <td className={td}>
-                      {a.kev_cves > 0 ? (
-                        <Badge tone="danger">{a.kev_cves} KEV</Badge>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                    <td className={td}>
-                      <RiskBadge band={a.risk.band} value={a.risk.value} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table<ReportTopAsset>
+              columns={assetColumns}
+              rows={sortedAssets}
+              getRowId={(a) => `${a.name}-${a.ip ?? ""}`}
+              sort={assetSort}
+              onSortChange={setAssetSort}
+              density="compact"
+              empty="No assets yet."
+            />
           )}
         </Panel>
 
@@ -283,53 +468,49 @@ export function ReportsView() {
           title="Most urgent vulnerabilities"
           description="Top 10 — KEV first, then exploit probability (EPSS), then CVSS."
           bodyClassName="overflow-x-auto"
+          actions={
+            <div className="no-print flex items-center gap-3 text-xs text-muted">
+              <Tooltip
+                content="CVSS: Common Vulnerability Scoring System — a standardised severity score from 0.0 to 10.0."
+                side="top"
+              >
+                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                  CVSS
+                </span>
+              </Tooltip>
+              <Tooltip
+                content="EPSS: Exploit Prediction Scoring System — probability (0–100%) that a CVE will be exploited in the next 30 days."
+                side="top"
+              >
+                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                  EPSS
+                </span>
+              </Tooltip>
+              <Tooltip
+                content="KEV: CISA Known Exploited Vulnerabilities catalogue — these CVEs have confirmed active exploitation."
+                side="top"
+              >
+                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                  KEV
+                </span>
+              </Tooltip>
+            </div>
+          }
         >
           {vulns.top_cves.length === 0 ? (
             <p className="px-5 py-4 text-sm text-muted">
               No correlated CVEs in the inventory.
             </p>
           ) : (
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-line">
-                  <th className={th}>CVE</th>
-                  <th className={th}>Severity</th>
-                  <th className={th}>CVSS</th>
-                  <th className={th}>EPSS</th>
-                  <th className={th}>KEV</th>
-                  <th className={th}>Affected</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vulns.top_cves.map((v) => (
-                  <tr
-                    key={v.cve_id}
-                    className="border-b border-line last:border-0"
-                  >
-                    <td className={`${td} font-mono text-xs text-fg`}>
-                      {v.cve_id}
-                    </td>
-                    <td className={td}>
-                      <SeverityBadge severity={v.severity} />
-                    </td>
-                    <td className={`${td} tabular-nums`}>
-                      {formatCvss(v.cvss)}
-                    </td>
-                    <td className={`${td} tabular-nums`}>
-                      {formatEpss(v.epss)}
-                    </td>
-                    <td className={td}>
-                      {v.kev ? (
-                        <Badge tone="danger">KEV</Badge>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                    <td className={`${td} tabular-nums`}>{v.affected}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table<ReportTopCve>
+              columns={cveColumns}
+              rows={sortedCves}
+              getRowId={(v) => v.cve_id}
+              sort={cveSort}
+              onSortChange={setCveSort}
+              density="compact"
+              empty="No correlated CVEs in the inventory."
+            />
           )}
         </Panel>
 
