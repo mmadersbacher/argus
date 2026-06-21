@@ -142,3 +142,80 @@ export function Toggle({
     </label>
   );
 }
+
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  indeterminate,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+  indeterminate?: boolean;
+  disabled?: boolean;
+}) {
+  const input = (
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      ref={(el) => {
+        if (el) el.indeterminate = Boolean(indeterminate);
+      }}
+      onChange={(e) => onChange(e.target.checked)}
+      className={cx(
+        "h-4 w-4 rounded border-line text-accent accent-accent",
+        focusRing,
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    />
+  );
+  if (!label) return input;
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-fg-2">
+      {input}
+      {label}
+    </label>
+  );
+}
+
+export function Radio({
+  checked,
+  onChange,
+  name,
+  value,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: string) => void;
+  name: string;
+  value: string;
+  label?: string;
+  disabled?: boolean;
+}) {
+  const input = (
+    <input
+      type="radio"
+      name={name}
+      value={value}
+      checked={checked}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className={cx(
+        "h-4 w-4 border-line text-accent accent-accent",
+        focusRing,
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    />
+  );
+  if (!label) return input;
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-fg-2">
+      {input}
+      {label}
+    </label>
+  );
+}
