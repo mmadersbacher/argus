@@ -9,5 +9,7 @@ function Trigger() {
 test("toast() shows a message in a live region", async () => {
   render(<ToastProvider><Trigger /></ToastProvider>);
   await userEvent.click(screen.getByRole("button", { name: "go" }));
-  expect(await screen.findByText("Saved")).toBeInTheDocument();
+  const el = await screen.findByText("Saved");
+  expect(el).toBeInTheDocument();
+  expect(el.closest('[aria-live="polite"]')).not.toBeNull();
 });

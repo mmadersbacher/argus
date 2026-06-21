@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { cx } from "./internal";
 import { Portal } from "./overlay-core";
 
@@ -16,12 +16,18 @@ const toneRing: Record<Tone, string> = {
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastMsg[]>([]);
   const seq = useRef(0);
+  const timers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const toast = useCallback((o: ToastInput) => {
     const id = ++seq.current;
     setItems((xs) => [...xs, { id, title: o.title, description: o.description, tone: o.tone ?? "default" }]);
     const ms = o.duration ?? 4000;
-    setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), ms);
+    const t = setTimeout(() => {
+      setItems((xs) => xs.filter((x) => x.id !== id));
+      timers.current.delete(id);
+    }, ms);
+    timers.current.set(id, t);
   }, []);
+  useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
   return (
     <ToastCtx.Provider value={{ toast }}>
       {children}
