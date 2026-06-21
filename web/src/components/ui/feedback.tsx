@@ -11,6 +11,53 @@ export function FormError({ children }: { children: React.ReactNode }) {
   );
 }
 
+export function Skeleton({
+  variant = "rect",
+  width,
+  height,
+  className,
+}: {
+  variant?: "text" | "rect" | "circle";
+  width?: number | string;
+  height?: number | string;
+  className?: string;
+}) {
+  const shape =
+    variant === "circle"
+      ? "rounded-full"
+      : variant === "text"
+        ? "rounded h-3"
+        : "rounded-md";
+  return (
+    <span
+      data-testid="skeleton"
+      aria-hidden="true"
+      className={cx("block animate-pulse bg-surface-2", shape, className)}
+      style={{ width, height: variant === "text" ? height ?? undefined : height }}
+    />
+  );
+}
+
+export function SkeletonTable({
+  rows = 5,
+  cols = 4,
+}: {
+  rows?: number;
+  cols?: number;
+}) {
+  return (
+    <div className="space-y-2" aria-hidden="true">
+      {Array.from({ length: rows }).map((_, r) => (
+        <div key={r} data-testid="skeleton-row" className="flex gap-3">
+          {Array.from({ length: cols }).map((_, c) => (
+            <Skeleton key={c} variant="text" className="flex-1" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const badgeTones: Record<
   "neutral" | "accent" | "ok" | "warn" | "danger" | "info",
   string

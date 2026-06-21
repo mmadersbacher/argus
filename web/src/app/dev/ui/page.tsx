@@ -8,6 +8,8 @@ import {
   Radio,
   Link,
   ButtonLink,
+  Skeleton,
+  SkeletonTable,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -122,6 +124,21 @@ export default function UiGallery() {
             Danger
           </ButtonLink>
         </div>
+      </Panel>
+      <Panel title="Skeleton">
+        <div className="space-y-4">
+          <div className="flex gap-3 items-center">
+            <Skeleton variant="circle" width={40} height={40} />
+            <div className="space-y-2 flex-1">
+              <Skeleton variant="text" width="60%" />
+              <Skeleton variant="text" width="40%" />
+            </div>
+          </div>
+          <Skeleton variant="rect" width="100%" height={200} />
+        </div>
+      </Panel>
+      <Panel title="SkeletonTable">
+        <SkeletonTable rows={3} cols={4} />
       </Panel>
     </div>
   );
