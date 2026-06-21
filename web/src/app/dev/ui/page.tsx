@@ -17,8 +17,24 @@ import {
   Menu,
   ConfirmDialog,
   useToast,
+  Table,
+  type Column,
+  type SortState,
 } from "@/components/ui";
 import { useState } from "react";
+
+type DemoRow = { id: string; host: string; risk: number; status: string };
+const demoRows: DemoRow[] = [
+  { id: "1", host: "db-prod-01", risk: 9, status: "Critical" },
+  { id: "2", host: "web-prod-02", risk: 4, status: "Medium" },
+  { id: "3", host: "api-prod-03", risk: 7, status: "High" },
+  { id: "4", host: "cache-01", risk: 2, status: "Low" },
+];
+const demoColumns: Column<DemoRow>[] = [
+  { key: "host", header: "Host", sortable: true },
+  { key: "risk", header: "Risk", numeric: true, sortable: true },
+  { key: "status", header: "Status" },
+];
 
 export default function UiGallery() {
   const [textValue, setTextValue] = useState("");
@@ -30,6 +46,8 @@ export default function UiGallery() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
   const { toast } = useToast();
+  const [tableSort, setTableSort] = useState<SortState>({ key: "risk", dir: "desc" });
+  const [tableSelection, setTableSelection] = useState<Set<string>>(new Set());
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -242,6 +260,31 @@ export default function UiGallery() {
             Fire default toast
           </Button>
         </div>
+      </Panel>
+      <Panel title="Table">
+        <div className="space-y-2">
+          <p className="text-xs text-muted">
+            {tableSelection.size} row(s) selected — sort: {tableSort.key} {tableSort.dir}
+          </p>
+          <Table<DemoRow>
+            columns={demoColumns}
+            rows={demoRows}
+            getRowId={(r) => r.id}
+            sort={tableSort}
+            onSortChange={setTableSort}
+            selection={tableSelection}
+            onSelectionChange={setTableSelection}
+          />
+        </div>
+      </Panel>
+      <Panel title="Table (comfortable density, empty state)">
+        <Table<DemoRow>
+          columns={demoColumns}
+          rows={[]}
+          getRowId={(r) => r.id}
+          density="comfortable"
+          empty={<span>No assets found</span>}
+        />
       </Panel>
       <Panel title="ConfirmDialog">
         <div className="flex items-center gap-4">

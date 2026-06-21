@@ -148,12 +148,14 @@ export function Checkbox({
   checked,
   onChange,
   label,
+  ariaLabel,
   indeterminate,
   disabled,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label?: string;
+  ariaLabel?: string;
   indeterminate?: boolean;
   disabled?: boolean;
 }) {
@@ -162,6 +164,7 @@ export function Checkbox({
       type="checkbox"
       checked={checked}
       disabled={disabled}
+      aria-label={ariaLabel}
       ref={(el) => {
         if (el) el.indeterminate = Boolean(indeterminate);
       }}
