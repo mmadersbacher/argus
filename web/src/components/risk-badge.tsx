@@ -1,19 +1,22 @@
 import type { RiskBand, Severity } from "@/lib/api";
 import { bandStyles } from "@/lib/ui";
+import { Tooltip } from "@/components/ui";
 
 export function RiskBadge({ band, value }: { band: RiskBand; value?: number }) {
   const s = bandStyles[band];
   return (
-    <span
-      title="Heuristic risk score — a composite weighting of CVSS severity, exposure and asset criticality, not a calibrated model"
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.text} ${s.bg} ${s.ring}`}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {s.label}
-      {typeof value === "number" ? (
-        <span className="tabular-nums opacity-75">{Math.round(value)}</span>
-      ) : null}
-    </span>
+    <Tooltip content="Heuristic risk score — a composite weighting of CVSS severity, exposure and asset criticality, not a calibrated model">
+      <span
+        tabIndex={0}
+        className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.text} ${s.bg} ${s.ring}`}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        {s.label}
+        {typeof value === "number" ? (
+          <span className="tabular-nums opacity-75">{Math.round(value)}</span>
+        ) : null}
+      </span>
+    </Tooltip>
   );
 }
 

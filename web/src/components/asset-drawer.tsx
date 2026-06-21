@@ -25,7 +25,7 @@ import {
   formatEpss,
   isConfirmedConfidence,
 } from "@/lib/ui";
-import { Badge, Drawer, Field, Panel, Select, Table, type Column } from "@/components/ui";
+import { Badge, Drawer, Field, Panel, Select, Table, Tooltip, type Column } from "@/components/ui";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
 
 const CRITICALITIES: Criticality[] = ["low", "medium", "high", "critical"];
@@ -54,12 +54,14 @@ function VulnItem({ v }: { v: Vulnerability }) {
           EPSS {formatEpss(v.epss.score)}
         </span>
       ) : null}
-      <span
-        className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
-        title={confidenceHint[v.match_confidence]}
-      >
-        {confidenceLabel[v.match_confidence]}
-      </span>
+      <Tooltip content={confidenceHint[v.match_confidence]}>
+        <span
+          tabIndex={0}
+          className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
+        >
+          {confidenceLabel[v.match_confidence]}
+        </span>
+      </Tooltip>
       {v.kev ? (
         <span className="ml-auto">
           <Badge tone="danger">KEV</Badge>
