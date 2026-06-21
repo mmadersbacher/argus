@@ -474,7 +474,7 @@ export function ReportsView() {
                 content="CVSS: Common Vulnerability Scoring System — a standardised severity score from 0.0 to 10.0."
                 side="top"
               >
-                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                <span className="cursor-default underline decoration-dashed underline-offset-2" tabIndex={0}>
                   CVSS
                 </span>
               </Tooltip>
@@ -482,7 +482,7 @@ export function ReportsView() {
                 content="EPSS: Exploit Prediction Scoring System — probability (0–100%) that a CVE will be exploited in the next 30 days."
                 side="top"
               >
-                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                <span className="cursor-default underline decoration-dashed underline-offset-2" tabIndex={0}>
                   EPSS
                 </span>
               </Tooltip>
@@ -490,7 +490,7 @@ export function ReportsView() {
                 content="KEV: CISA Known Exploited Vulnerabilities catalogue — these CVEs have confirmed active exploitation."
                 side="top"
               >
-                <span className="cursor-default underline decoration-dashed underline-offset-2">
+                <span className="cursor-default underline decoration-dashed underline-offset-2" tabIndex={0}>
                   KEV
                 </span>
               </Tooltip>
