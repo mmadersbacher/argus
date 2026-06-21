@@ -10,6 +10,8 @@ import {
   ButtonLink,
   Skeleton,
   SkeletonTable,
+  Tabs,
+  TabPanel,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -18,6 +20,7 @@ export default function UiGallery() {
   const [checkboxValue, setCheckboxValue] = useState(false);
   const [indeterminateValue, setIndeterminateValue] = useState(false);
   const [radioValue, setRadioValue] = useState("option1");
+  const [activeTab, setActiveTab] = useState("tab1");
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -135,6 +138,28 @@ export default function UiGallery() {
             </div>
           </div>
           <Skeleton variant="rect" width="100%" height={200} />
+        </div>
+      </Panel>
+      <Panel title="Tabs">
+        <Tabs
+          tabs={[
+            { id: "tab1", label: "First" },
+            { id: "tab2", label: "Second" },
+            { id: "tab3", label: "Third" },
+          ]}
+          active={activeTab}
+          onChange={setActiveTab}
+        />
+        <div className="mt-4">
+          <TabPanel when="tab1" active={activeTab}>
+            <p className="text-fg">First tab content</p>
+          </TabPanel>
+          <TabPanel when="tab2" active={activeTab}>
+            <p className="text-fg">Second tab content</p>
+          </TabPanel>
+          <TabPanel when="tab3" active={activeTab}>
+            <p className="text-fg">Third tab content</p>
+          </TabPanel>
         </div>
       </Panel>
       <Panel title="SkeletonTable">

@@ -1,7 +1,7 @@
 "use client";
 
 import { cx, focusRing } from "./internal";
-import { Icon } from "@/components/icon";
+import { Icon, type IconName } from "@/components/icon";
 
 export const buttonVariants: Record<
   "primary" | "secondary" | "ghost" | "danger",
@@ -272,4 +272,46 @@ export function ButtonLink({
       {...rest}
     />
   );
+}
+
+export function Tabs({
+  tabs, active, onChange,
+}: { tabs: { id: string; label: string; icon?: IconName }[]; active: string; onChange: (id: string) => void }) {
+  return (
+    <div role="tablist" className="flex gap-1 border-b border-line">
+      {tabs.map((t) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            type="button"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(t.id)}
+            onKeyDown={(e) => {
+              const i = tabs.findIndex((x) => x.id === active);
+              if (e.key === "ArrowRight") onChange(tabs[(i + 1) % tabs.length].id);
+              if (e.key === "ArrowLeft") onChange(tabs[(i - 1 + tabs.length) % tabs.length].id);
+            }}
+            className={cx(
+              "inline-flex items-center gap-1.5 -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+              focusRing,
+              selected ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg",
+            )}
+          >
+            {t.icon ? <Icon name={t.icon} size={15} /> : null}
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function TabPanel({
+  when, active, children,
+}: { when: string; active: string; children: React.ReactNode }) {
+  if (when !== active) return null;
+  return <div role="tabpanel">{children}</div>;
 }
