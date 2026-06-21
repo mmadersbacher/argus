@@ -59,16 +59,21 @@ test('typing "vuln" shows only matching command(s)', async () => {
   expect(screen.queryByRole("option", { name: /overview/i })).not.toBeInTheDocument();
 });
 
-test("ArrowDown + Enter triggers the selected command action (navigate to /vulns)", async () => {
+test("ArrowDown moves selection from index 0 to index 1, Enter triggers second command (/assets)", async () => {
+  mockPush.mockClear();
   const user = userEvent.setup();
   renderPalette(true);
 
-  const input = screen.getByPlaceholderText(/search commands/i);
-  await user.type(input, "vuln");
+  // No filter — full list shown; index 0 = Overview (/), index 1 = Assets (/assets)
+  // Confirm both first and second items are present in the unfiltered list
+  expect(screen.getByRole("option", { name: /overview/i })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /assets/i })).toBeInTheDocument();
 
-  // First option should now be the Vulns route — move selection down and confirm
+  // ArrowDown in the input moves active index from 0 → 1
   await user.keyboard("{ArrowDown}");
   await user.keyboard("{Enter}");
 
-  expect(mockPush).toHaveBeenCalledWith("/vulns");
+  // Second command is "Assets" → router.push("/assets")
+  expect(mockPush).toHaveBeenCalledWith("/assets");
+  expect(mockPush).not.toHaveBeenCalledWith("/");
 });

@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Modal } from "@/components/ui";
+import { Input, Modal } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { useTheme, type Theme } from "@/components/theme";
 
@@ -168,7 +168,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted">
           <Icon name="search" size={15} />
         </span>
-        <input
+        <Input
           autoFocus
           placeholder="Search commands..."
           value={query}
@@ -176,7 +176,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             setQuery(e.target.value);
             setActiveIdx(0);
           }}
-          className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg transition-colors placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+          className="pl-8 pr-3"
           aria-label="Search commands"
           aria-autocomplete="list"
           aria-controls="command-palette-listbox"
