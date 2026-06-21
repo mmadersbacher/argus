@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Icon } from "@/components/icon";
 import { cx, focusRing } from "./internal";
+import { useDismiss, useFocusTrap } from "./overlay-core";
 
 const ghostButton = "text-fg-2 hover:bg-surface-2 hover:text-fg";
 
@@ -29,51 +30,8 @@ export function Drawer({
   const asideRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  // Escape closes — window-level so it works regardless of focus position.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  // While mounted: lock body scroll, move focus to the close button; on
-  // unmount restore both the scroll state and the previously focused element.
-  useEffect(() => {
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      previouslyFocused?.focus();
-    };
-  }, []);
-
-  // Simple focus trap: Tab and Shift+Tab cycle within the aside.
-  const trapFocus = (e: React.KeyboardEvent) => {
-    if (e.key !== "Tab" || !asideRef.current) return;
-    const focusables = asideRef.current.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey) {
-      if (active === first || !asideRef.current.contains(active)) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else if (active === last || !asideRef.current.contains(active)) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+  useDismiss(onClose);
+  const trap = useFocusTrap(asideRef, { initialFocus: closeRef });
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -88,7 +46,7 @@ export function Drawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        onKeyDown={trapFocus}
+        onKeyDown={trap}
         className="argus-slide relative flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-line bg-surface"
       >
         <div className="border-b border-line px-6 pt-5 pb-4">
