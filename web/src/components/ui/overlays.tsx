@@ -4,8 +4,7 @@ import { useRef } from "react";
 import { Icon } from "@/components/icon";
 import { cx, focusRing } from "./internal";
 import { useDismiss, useFocusTrap } from "./overlay-core";
-
-const ghostButton = "text-fg-2 hover:bg-surface-2 hover:text-fg";
+import { buttonVariants } from "./controls";
 
 /** Right-hand slide-over dialog — the one drawer shell for asset and CVE
  *  details. Owns the full modal contract: backdrop, Escape, focus trap,
@@ -72,7 +71,7 @@ export function Drawer({
               className={cx(
                 "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
                 focusRing,
-                ghostButton,
+                buttonVariants.ghost,
               )}
             >
               <Icon name="x" size={16} />

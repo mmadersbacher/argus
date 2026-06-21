@@ -6,6 +6,8 @@ import {
   Textarea,
   Checkbox,
   Radio,
+  Link,
+  ButtonLink,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -92,6 +94,33 @@ export default function UiGallery() {
             label="Disabled radio"
             disabled
           />
+        </div>
+      </Panel>
+      <Panel title="Link">
+        <div className="flex flex-col gap-3">
+          <Link href="/dev">Internal link</Link>
+          <Link href="https://github.com" external>
+            External link
+          </Link>
+          <Link href="https://docs.example.com" external icon>
+            External link with icon
+          </Link>
+        </div>
+      </Panel>
+      <Panel title="ButtonLink">
+        <div className="flex gap-2">
+          <ButtonLink href="/dev" variant="primary">
+            Primary
+          </ButtonLink>
+          <ButtonLink href="/dev" variant="secondary">
+            Secondary
+          </ButtonLink>
+          <ButtonLink href="/dev" variant="ghost">
+            Ghost
+          </ButtonLink>
+          <ButtonLink href="/dev" variant="danger">
+            Danger
+          </ButtonLink>
         </div>
       </Panel>
     </div>

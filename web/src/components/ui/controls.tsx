@@ -1,8 +1,9 @@
 "use client";
 
 import { cx, focusRing } from "./internal";
+import { Icon } from "@/components/icon";
 
-const buttonVariants: Record<
+export const buttonVariants: Record<
   "primary" | "secondary" | "ghost" | "danger",
   string
 > = {
@@ -12,7 +13,7 @@ const buttonVariants: Record<
   danger: "bg-crit text-white hover:bg-crit/90",
 };
 
-const buttonSizes: Record<"sm" | "md", string> = {
+export const buttonSizes: Record<"sm" | "md", string> = {
   sm: "h-8 px-2.5 text-xs",
   md: "h-9 px-3.5 text-sm",
 };
@@ -217,5 +218,58 @@ export function Radio({
       {input}
       {label}
     </label>
+  );
+}
+
+export function Link({
+  href,
+  external,
+  icon,
+  children,
+  className,
+  ...rest
+}: {
+  href: string;
+  external?: boolean;
+  icon?: boolean;
+} & React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return (
+    <a
+      href={href}
+      className={cx(
+        "inline-flex items-center gap-1 text-accent underline-offset-2 hover:underline",
+        focusRing,
+        "rounded",
+        className,
+      )}
+      {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})}
+      {...rest}
+    >
+      {children}
+      {external && icon ? <Icon name="external" size={14} /> : null}
+    </a>
+  );
+}
+
+export function ButtonLink({
+  variant = "primary",
+  size = "md",
+  className,
+  ...rest
+}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "sm" | "md";
+}) {
+  return (
+    <a
+      className={cx(
+        "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors",
+        focusRing,
+        buttonVariants[variant],
+        buttonSizes[size],
+        className,
+      )}
+      {...rest}
+    />
   );
 }
