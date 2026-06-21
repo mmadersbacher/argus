@@ -16,7 +16,7 @@ import { useGraph } from "@/lib/use-graph";
 import { useInventory } from "@/lib/use-inventory";
 import { AssetDrawer } from "@/components/asset-drawer";
 import { Icon } from "@/components/icon";
-import { Button, PageHeader, Panel } from "@/components/ui";
+import { Button, Input, PageHeader, Panel, Select, Toggle } from "@/components/ui";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 
 // ---- layout geometry (stage coordinates, pre-zoom) -------------------------
@@ -36,6 +36,9 @@ const ZOOM_MAX = 2.2;
 // info → critical, for the legend (low-to-high reading order).
 const bandOrderReversed: RiskBand[] = ["info", "low", "medium", "high", "critical"];
 
+// All asset types for the type-filter dropdown.
+const ALL_ASSET_TYPES: AssetType[] = ["it", "ot", "iot", "iomt", "network", "cloud", "mobile", "unknown"];
+
 interface Placed {
   x: number;
   y: number;
@@ -43,9 +46,11 @@ interface Placed {
 interface DeviceNode extends Placed {
   id: string;
   ip: string;
+  hostname: string | null;
   type: AssetType;
   band: RiskBand;
   internetFacing: boolean;
+  hasServices: boolean;
 }
 interface SwitchNode extends Placed {
   id: string;
@@ -59,6 +64,7 @@ interface Edge {
   y1: number;
   x2: number;
   y2: number;
+  deviceId?: string; // set on switch→device edges for dimming
 }
 interface Layout {
   switches: SwitchNode[];
@@ -74,6 +80,12 @@ function assetIp(asset: ScoredAsset | undefined): string | null {
   if (!asset) return null;
   const ips = asset.interfaces.map((i) => i.ip).filter((ip): ip is string => !!ip);
   return ips.find((ip) => ip.includes(".")) ?? ips[0] ?? null;
+}
+
+/** First hostname of an asset, or null. */
+function assetHostname(asset: ScoredAsset | undefined): string | null {
+  if (!asset) return null;
+  return asset.interfaces.find((i) => i.hostname)?.hostname ?? null;
 }
 
 /** Sort key for an IPv4 string so .2 < .10 < .100 within a subnet. */
@@ -119,12 +131,16 @@ function layout(graph: GraphData, byId: Map<string, ScoredAsset>): Layout {
         const gn = assetNodes.get(id);
         const asset = byId.get(id);
         const ip = assetIp(asset) ?? gn?.label ?? "—";
+        const hostname = assetHostname(asset);
+        const hasServices = (asset?.services?.length ?? 0) > 0;
         return {
           id,
           ip,
+          hostname,
           type: (gn?.asset_type ?? "unknown") as AssetType,
           band: (gn?.band ?? "info") as RiskBand,
           internetFacing: gn?.exposure === "internet_facing",
+          hasServices,
         };
       })
       .sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
@@ -167,7 +183,7 @@ function layout(graph: GraphData, byId: Map<string, ScoredAsset>): Layout {
   for (const s of switches) {
     edges.push({ key: `gw-${s.id}`, x1: gateway.x, y1: gateway.y, x2: s.x, y2: s.y });
     for (const d of s.devices) {
-      edges.push({ key: `${s.id}-${d.id}`, x1: s.x, y1: s.y, x2: d.x, y2: d.y });
+      edges.push({ key: `${s.id}-${d.id}`, x1: s.x, y1: s.y, x2: d.x, y2: d.y, deviceId: d.id });
     }
   }
 
@@ -225,19 +241,31 @@ function SwitchTile({ node }: { node: SwitchNode }) {
 function Device({
   node,
   selected,
+  highlight,
+  dim,
   onSelect,
 }: {
   node: DeviceNode;
   selected: boolean;
+  highlight: boolean;
+  dim: boolean;
   onSelect: (id: string) => void;
 }) {
   return (
     <button
       type="button"
       onClick={() => onSelect(node.id)}
-      className={`absolute flex w-[112px] -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded-xl border bg-surface px-2 py-2.5 text-center shadow-sm transition hover:border-accent hover:shadow-md ${
-        selected ? "border-accent ring-2 ring-accent/30" : "border-line"
-      }`}
+      className={[
+        "absolute flex w-[112px] -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded-xl border bg-surface px-2 py-2.5 text-center shadow-sm transition hover:border-accent hover:shadow-md",
+        selected
+          ? "border-accent ring-2 ring-accent/30"
+          : highlight
+            ? "border-accent ring-2 ring-accent/50 scale-110"
+            : "border-line",
+        dim ? "opacity-25" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       style={{ left: node.x, top: node.y }}
       title={`${assetTypeLabel[node.type]} · ${node.ip}`}
     >
@@ -261,10 +289,47 @@ function Device({
   );
 }
 
+// ---- filter state ----------------------------------------------------------
+interface FilterState {
+  search: string;
+  riskBand: RiskBand | "all";
+  assetType: AssetType | "all";
+  hideUnscanned: boolean;
+  hideInfo: boolean;
+}
+
+const DEFAULT_FILTERS: FilterState = {
+  search: "",
+  riskBand: "all",
+  assetType: "all",
+  hideUnscanned: false,
+  hideInfo: false,
+};
+
+/** Returns true if the device passes the active filter set. */
+function deviceVisible(node: DeviceNode, f: FilterState): boolean {
+  if (f.riskBand !== "all" && node.band !== f.riskBand) return false;
+  if (f.assetType !== "all" && node.type !== f.assetType) return false;
+  if (f.hideUnscanned && !node.hasServices && node.band === "info") return false;
+  if (f.hideInfo && node.band === "info") return false;
+  return true;
+}
+
+/** Returns true if the device matches the search query. */
+function deviceMatchesSearch(node: DeviceNode, q: string): boolean {
+  if (!q) return true;
+  const lq = q.toLowerCase();
+  if (node.ip.toLowerCase().includes(lq)) return true;
+  if (node.hostname?.toLowerCase().includes(lq)) return true;
+  if (assetTypeLabel[node.type].toLowerCase().includes(lq)) return true;
+  return false;
+}
+
 export function GraphView() {
   const { graph, error, loading, reload } = useGraph();
   const { assets, reload: reloadInventory } = useInventory();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
 
   const byId = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const model = useMemo(
@@ -293,6 +358,40 @@ export function GraphView() {
     ro.observe(vp);
     return () => ro.disconnect();
   }, [fit]);
+
+  // Derived: which device IDs are visible / highlighted / dimmed.
+  const { visibleIds, highlightedIds, firstMatchNode } = useMemo(() => {
+    if (!model) return { visibleIds: new Set<string>(), highlightedIds: new Set<string>(), firstMatchNode: null };
+
+    const allDevices = model.switches.flatMap((s) => s.devices);
+    const visible = new Set<string>();
+    const highlighted = new Set<string>();
+    let firstMatch: DeviceNode | null = null;
+
+    const hasSearch = filters.search.trim().length > 0;
+
+    for (const d of allDevices) {
+      if (!deviceVisible(d, filters)) continue;
+      visible.add(d.id);
+      if (hasSearch && deviceMatchesSearch(d, filters.search)) {
+        highlighted.add(d.id);
+        if (!firstMatch) firstMatch = d;
+      }
+    }
+
+    return { visibleIds: visible, highlightedIds: highlighted, firstMatchNode: firstMatch };
+  }, [model, filters]);
+
+  // Auto-pan to the first search match.
+  useEffect(() => {
+    if (!firstMatchNode || !viewportRef.current) return;
+    const vp = viewportRef.current;
+    setView((v) => ({
+      ...v,
+      x: vp.clientWidth / 2 - firstMatchNode.x * v.k,
+      y: vp.clientHeight / 2 - firstMatchNode.y * v.k,
+    }));
+  }, [firstMatchNode]);
 
   const onWheel = useCallback((e: RWheelEvent) => {
     e.preventDefault();
@@ -326,6 +425,15 @@ export function GraphView() {
     void reload();
     void reloadInventory();
   };
+
+  const isFiltered =
+    filters.search !== DEFAULT_FILTERS.search ||
+    filters.riskBand !== DEFAULT_FILTERS.riskBand ||
+    filters.assetType !== DEFAULT_FILTERS.assetType ||
+    filters.hideUnscanned !== DEFAULT_FILTERS.hideUnscanned ||
+    filters.hideInfo !== DEFAULT_FILTERS.hideInfo;
+
+  const hasSearch = filters.search.trim().length > 0;
 
   return (
     <div className="space-y-6">
@@ -368,6 +476,78 @@ export function GraphView() {
           />
         ) : (
           <>
+            {/* ---- filter bar ---- */}
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <div className="w-52">
+                <Input
+                  placeholder="Search IP, hostname, type…"
+                  value={filters.search}
+                  onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+                />
+              </div>
+
+              <Select
+                value={filters.riskBand}
+                onChange={(e) =>
+                  setFilters((f) => ({ ...f, riskBand: e.target.value as RiskBand | "all" }))
+                }
+                className="w-36"
+              >
+                <option value="all">All risks</option>
+                {bandOrderReversed.slice().reverse().map((b) => (
+                  <option key={b} value={b}>
+                    {bandStyles[b].label}
+                  </option>
+                ))}
+              </Select>
+
+              <Select
+                value={filters.assetType}
+                onChange={(e) =>
+                  setFilters((f) => ({ ...f, assetType: e.target.value as AssetType | "all" }))
+                }
+                className="w-36"
+              >
+                <option value="all">All types</option>
+                {ALL_ASSET_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {assetTypeLabel[t]}
+                  </option>
+                ))}
+              </Select>
+
+              <Toggle
+                checked={filters.hideUnscanned}
+                onChange={(v) => setFilters((f) => ({ ...f, hideUnscanned: v }))}
+                label="Hide unscanned"
+              />
+
+              <Toggle
+                checked={filters.hideInfo}
+                onChange={(v) => setFilters((f) => ({ ...f, hideInfo: v }))}
+                label="Hide info-risk"
+              />
+
+              {isFiltered && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setFilters(DEFAULT_FILTERS)}
+                >
+                  Clear
+                </Button>
+              )}
+
+              {hasSearch && highlightedIds.size > 0 && (
+                <span className="text-xs text-muted">
+                  {highlightedIds.size} match{highlightedIds.size !== 1 ? "es" : ""}
+                </span>
+              )}
+              {hasSearch && highlightedIds.size === 0 && (
+                <span className="text-xs text-muted">No matches</span>
+              )}
+            </div>
+
             <div
               ref={viewportRef}
               onWheel={onWheel}
@@ -390,17 +570,32 @@ export function GraphView() {
                   width={model.width}
                   height={model.height}
                 >
-                  {model.edges.map((e) => (
-                    <line
-                      key={e.key}
-                      x1={e.x1}
-                      y1={e.y1}
-                      x2={e.x2}
-                      y2={e.y2}
-                      stroke="var(--color-line-strong)"
-                      strokeWidth={1.25}
-                    />
-                  ))}
+                  {model.edges.map((e) => {
+                    // Dim edges to non-visible device nodes
+                    const isDimEdge =
+                      e.deviceId !== undefined && !visibleIds.has(e.deviceId);
+                    const isHighlightEdge =
+                      hasSearch &&
+                      e.deviceId !== undefined &&
+                      highlightedIds.has(e.deviceId);
+                    const isSearchDimEdge =
+                      hasSearch &&
+                      e.deviceId !== undefined &&
+                      !highlightedIds.has(e.deviceId) &&
+                      visibleIds.has(e.deviceId);
+                    return (
+                      <line
+                        key={e.key}
+                        x1={e.x1}
+                        y1={e.y1}
+                        x2={e.x2}
+                        y2={e.y2}
+                        stroke="var(--color-line-strong)"
+                        strokeWidth={isHighlightEdge ? 2 : 1.25}
+                        opacity={isDimEdge || isSearchDimEdge ? 0.15 : 1}
+                      />
+                    );
+                  })}
                 </svg>
 
                 <Hub {...model.internet} icon="cloud" title="Internet" />
@@ -414,14 +609,22 @@ export function GraphView() {
                   <SwitchTile key={s.id} node={s} />
                 ))}
                 {model.switches.flatMap((s) =>
-                  s.devices.map((d) => (
-                    <Device
-                      key={d.id}
-                      node={d}
-                      selected={d.id === selectedId}
-                      onSelect={setSelectedId}
-                    />
-                  )),
+                  s.devices.map((d) => {
+                    const isVisible = visibleIds.has(d.id);
+                    if (!isVisible) return null;
+                    const isHighlighted = hasSearch ? highlightedIds.has(d.id) : false;
+                    const isDimmed = hasSearch && !isHighlighted;
+                    return (
+                      <Device
+                        key={d.id}
+                        node={d}
+                        selected={d.id === selectedId}
+                        highlight={isHighlighted}
+                        dim={isDimmed}
+                        onSelect={setSelectedId}
+                      />
+                    );
+                  }),
                 )}
               </div>
             </div>
