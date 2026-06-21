@@ -16,6 +16,7 @@ import {
   Tooltip,
   Menu,
   ConfirmDialog,
+  useToast,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -28,6 +29,7 @@ export default function UiGallery() {
   const [currentPage, setCurrentPage] = useState(1);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
+  const { toast } = useToast();
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -223,6 +225,22 @@ export default function UiGallery() {
               { label: "Disabled action", disabled: true, onSelect: () => {} },
             ]}
           />
+        </div>
+      </Panel>
+      <Panel title="Toast">
+        <div className="flex gap-2 flex-wrap">
+          <Button onClick={() => toast({ title: "Saved successfully", tone: "ok" })}>
+            Fire ok toast
+          </Button>
+          <Button variant="secondary" onClick={() => toast({ title: "Heads up", description: "Something needs attention.", tone: "warn" })}>
+            Fire warn toast
+          </Button>
+          <Button variant="danger" onClick={() => toast({ title: "Operation failed", description: "Please try again.", tone: "danger" })}>
+            Fire danger toast
+          </Button>
+          <Button variant="ghost" onClick={() => toast({ title: "Note", tone: "default" })}>
+            Fire default toast
+          </Button>
         </div>
       </Panel>
       <Panel title="ConfirmDialog">
