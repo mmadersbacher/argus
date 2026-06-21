@@ -164,7 +164,8 @@ export function Checkbox({
       type="checkbox"
       checked={checked}
       disabled={disabled}
-      aria-label={ariaLabel}
+      aria-label={ariaLabel} // Note: passing both label and ariaLabel is unsupported; aria-label overrides visible label for AT
+
       ref={(el) => {
         if (el) el.indeterminate = Boolean(indeterminate);
       }}

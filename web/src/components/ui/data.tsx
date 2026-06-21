@@ -99,7 +99,7 @@ export function Table<Row>({
         <thead className="bg-surface-2 text-left text-muted">
           <tr>
             {selectable && (
-              <th className={cx(pad, "w-10", sticky && "sticky top-0 z-10 bg-surface-2")}>
+              <th scope="col" className={cx(pad, "w-10", sticky && "sticky top-0 z-10 bg-surface-2")}>
                 <Checkbox
                   checked={allSelected}
                   onChange={toggleAll}
@@ -112,6 +112,7 @@ export function Table<Row>({
               return (
                 <th
                   key={c.key}
+                  scope="col"
                   style={{ width: c.width }}
                   aria-sort={
                     active

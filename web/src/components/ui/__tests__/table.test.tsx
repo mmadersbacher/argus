@@ -12,6 +12,7 @@ test("Table renders rows and toggles sort with aria-sort", async () => {
     rows={rows} getRowId={(r) => r.id}
     sort={{ key: "name", dir: "asc" }} onSortChange={onSort} />);
   expect(screen.getAllByRole("row")).toHaveLength(3); // header + 2
+  expect(screen.getByRole("columnheader", { name: /Name/ })).toHaveAttribute("aria-sort", "ascending");
   await userEvent.click(screen.getByRole("button", { name: /Name/ }));
   expect(onSort).toHaveBeenCalledWith({ key: "name", dir: "desc" });
 });
