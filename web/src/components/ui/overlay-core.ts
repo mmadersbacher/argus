@@ -15,18 +15,19 @@ export function useFocusTrap(
   ref: React.RefObject<HTMLElement | null>,
   opts?: { initialFocus?: React.RefObject<HTMLElement | null> },
 ) {
+  const initialFocus = opts?.initialFocus;
   useEffect(() => {
     const prevFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    (opts?.initialFocus?.current ??
+    (initialFocus?.current ??
       ref.current?.querySelector<HTMLElement>(SELECTOR))?.focus();
     return () => {
       document.body.style.overflow = prevOverflow;
       prevFocus?.focus();
     };
-  }, [ref, opts?.initialFocus]);
+  }, [ref, initialFocus]);
 
   return (e: React.KeyboardEvent) => {
     if (e.key !== "Tab" || !ref.current) return;

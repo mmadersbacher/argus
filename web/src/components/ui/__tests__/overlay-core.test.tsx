@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { Portal } from "@/components/ui/overlay-core";
 
 test("Portal renders children into document.body", () => {
