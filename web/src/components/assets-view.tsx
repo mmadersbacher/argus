@@ -51,15 +51,14 @@ function GroupCard({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="secondary"
       onClick={onClick}
       aria-pressed={active}
-      className={`flex items-center gap-3 rounded-xl border bg-surface p-4 text-left shadow-[0_1px_2px_rgba(16,24,40,0.05)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        active
-          ? "border-accent ring-1 ring-accent"
-          : "border-line hover:border-line-strong hover:bg-surface-2/60"
-      }`}
+      className={
+        "flex w-full items-center gap-3 rounded-xl p-4 text-left shadow-[0_1px_2px_rgba(16,24,40,0.05)]" +
+        (active ? " border-accent ring-1 ring-accent" : " hover:border-line-strong hover:bg-surface-2/60")
+      }
     >
       <span
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tile}`}
@@ -74,7 +73,7 @@ function GroupCard({
           {count} asset{count === 1 ? "" : "s"}
         </span>
       </span>
-    </button>
+    </Button>
   );
 }
 

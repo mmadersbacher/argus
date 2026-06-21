@@ -25,6 +25,7 @@ import {
 import {
   Badge,
   Button,
+  ButtonLink,
   Drawer,
   Input,
   PageHeader,
@@ -185,7 +186,7 @@ function BulkTriage({
   };
 
   return (
-    <div className="rounded-lg border border-line bg-surface-2/40 p-3">
+    <Panel bodyClassName="p-3">
       <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
         Triage all affected assets
       </p>
@@ -224,13 +225,9 @@ function BulkTriage({
         </Button>
       </div>
       {error ? <p className="mt-1.5 text-xs text-crit">{error}</p> : null}
-    </div>
+    </Panel>
   );
 }
-
-// Anchor styled as a secondary button — external links cannot use <Button>.
-const linkButtonClasses =
-  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3.5 text-sm font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 // ---- page -------------------------------------------------------------------
 
@@ -489,15 +486,16 @@ export function VulnsView() {
             </>
           }
           footer={
-            <a
+            <ButtonLink
               href={nvdUrl(selected.cve_id)}
               target="_blank"
               rel="noreferrer"
-              className={linkButtonClasses}
+              variant="secondary"
+              size="md"
             >
               <Icon name="external" size={14} />
               View on NVD
-            </a>
+            </ButtonLink>
           }
         >
           <div className="grid grid-cols-2 gap-3">
