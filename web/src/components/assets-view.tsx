@@ -55,6 +55,7 @@ function GroupCard({
       variant="secondary"
       onClick={onClick}
       aria-pressed={active}
+      // cx does NOT resolve Tailwind conflicts; rounded-xl wins over Button's rounded-lg only via source-order — revisit tailwind-merge if override count grows.
       className={
         "flex w-full items-center gap-3 rounded-xl p-4 text-left shadow-[0_1px_2px_rgba(16,24,40,0.05)]" +
         (active ? " border-accent ring-1 ring-accent" : " hover:border-line-strong hover:bg-surface-2/60")

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export function Portal({ children }: { children: React.ReactNode }) {
@@ -14,6 +14,19 @@ export function Portal({ children }: { children: React.ReactNode }) {
 const SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// ---------------------------------------------------------------------------
+// Module-level stacking coordination
+// ---------------------------------------------------------------------------
+
+/** Stack of dismiss tokens — topmost is the most recently opened overlay. */
+const _dismissStack: symbol[] = [];
+
+/** Scroll-lock ref count + saved overflow value. */
+let _scrollLockCount = 0;
+let _savedOverflow = "";
+
+// ---------------------------------------------------------------------------
+
 export function useFocusTrap(
   ref: React.RefObject<HTMLElement | null>,
   opts?: { initialFocus?: React.RefObject<HTMLElement | null> },
@@ -22,13 +35,27 @@ export function useFocusTrap(
   useEffect(() => {
     const prevFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+
+    // Ref-counted scroll lock: only save+lock on the first overlay.
+    if (_scrollLockCount === 0) {
+      _savedOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    _scrollLockCount++;
+
     (initialFocus?.current ??
       ref.current?.querySelector<HTMLElement>(SELECTOR))?.focus();
+
     return () => {
-      document.body.style.overflow = prevOverflow;
+      // Per-instance focus restore (LIFO — correct for nesting).
       prevFocus?.focus();
+
+      // Ref-counted scroll unlock: only restore on the last overlay.
+      _scrollLockCount--;
+      if (_scrollLockCount === 0) {
+        document.body.style.overflow = _savedOverflow;
+        _savedOverflow = "";
+      }
     };
   }, [ref, initialFocus]);
 
@@ -52,11 +79,30 @@ export function useFocusTrap(
 }
 
 export function useDismiss(onDismiss: () => void) {
+  // Stable ref so the keydown handler always calls the latest callback.
+  const onDismissRef = useRef(onDismiss);
   useEffect(() => {
+    onDismissRef.current = onDismiss;
+  });
+
+  useEffect(() => {
+    // Each overlay instance gets a unique symbol token pushed onto the stack.
+    const token = Symbol();
+    _dismissStack.push(token);
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDismiss();
+      if (e.key !== "Escape") return;
+      // Only fire for the topmost overlay.
+      if (_dismissStack[_dismissStack.length - 1] === token) {
+        onDismissRef.current();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onDismiss]);
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const idx = _dismissStack.lastIndexOf(token);
+      if (idx !== -1) _dismissStack.splice(idx, 1);
+    };
+  }, []); // intentionally empty — token and handler are stable
 }

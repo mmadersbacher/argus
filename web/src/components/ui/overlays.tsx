@@ -14,6 +14,7 @@ import {
   useInteractions,
   useClick,
   FloatingFocusManager,
+  FloatingPortal,
 } from "@floating-ui/react";
 import { Icon, type IconName } from "@/components/icon";
 import { cx, focusRing } from "./internal";
@@ -246,7 +247,7 @@ export function Tooltip({
         {children}
       </span>
       {open && (
-        <>
+        <FloatingPortal>
           <div
             // refs.setFloating is floating-ui's callback ref setter, not a render-time ref read
             // eslint-disable-next-line react-hooks/refs
@@ -257,7 +258,7 @@ export function Tooltip({
           >
             {content}
           </div>
-        </>
+        </FloatingPortal>
       )}
     </>
   );
@@ -308,42 +309,44 @@ export function Menu({
         {trigger}
       </button>
       {open && (
-        <FloatingFocusManager context={context} modal={false}>
-          <div
-            // refs.setFloating is floating-ui's callback ref setter, not a render-time ref read
-            // eslint-disable-next-line react-hooks/refs
-            ref={refs.setFloating}
-            style={floatingStyles}
-            {...getFloatingProps()}
-            className="z-50 min-w-40 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg"
-          >
-            {items.map((it, i) =>
-              "separator" in it ? (
-                <div key={i} className="my-1 border-t border-line" />
-              ) : (
-                <button
-                  key={i}
-                  role="menuitem"
-                  type="button"
-                  disabled={it.disabled}
-                  onClick={() => {
-                    it.onSelect();
-                    setOpen(false);
-                  }}
-                  className={cx(
-                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors disabled:opacity-50",
-                    it.tone === "danger"
-                      ? "text-crit hover:bg-crit/10"
-                      : "text-fg hover:bg-surface-2",
-                  )}
-                >
-                  {it.icon ? <Icon name={it.icon} size={15} /> : null}
-                  {it.label}
-                </button>
-              ),
-            )}
-          </div>
-        </FloatingFocusManager>
+        <FloatingPortal>
+          <FloatingFocusManager context={context} modal={false}>
+            <div
+              // refs.setFloating is floating-ui's callback ref setter, not a render-time ref read
+              // eslint-disable-next-line react-hooks/refs
+              ref={refs.setFloating}
+              style={floatingStyles}
+              {...getFloatingProps()}
+              className="z-50 min-w-40 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg"
+            >
+              {items.map((it, i) =>
+                "separator" in it ? (
+                  <div key={`separator-${i}`} role="separator" className="my-1 border-t border-line" />
+                ) : (
+                  <button
+                    key={it.label ?? i}
+                    role="menuitem"
+                    type="button"
+                    disabled={it.disabled}
+                    onClick={() => {
+                      it.onSelect();
+                      setOpen(false);
+                    }}
+                    className={cx(
+                      "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors disabled:opacity-50",
+                      it.tone === "danger"
+                        ? "text-crit hover:bg-crit/10"
+                        : "text-fg hover:bg-surface-2",
+                    )}
+                  >
+                    {it.icon ? <Icon name={it.icon} size={15} /> : null}
+                    {it.label}
+                  </button>
+                ),
+              )}
+            </div>
+          </FloatingFocusManager>
+        </FloatingPortal>
       )}
     </>
   );
