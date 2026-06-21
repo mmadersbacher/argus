@@ -355,8 +355,7 @@ export function RiskView() {
                       side="top"
                     >
                       <span
-                        tabIndex={0}
-                        className={`inline-flex -rotate-90 cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded ${
+                        className={`inline-flex -rotate-90 cursor-default rounded ${
                           worsened ? "text-crit" : "text-ok"
                         }`}
                         aria-hidden

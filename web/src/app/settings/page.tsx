@@ -194,9 +194,7 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
     >
       <form onSubmit={save} className="space-y-4">
         {error && (
-          <div id="monitor-error" role="alert">
-            <FormError>{error}</FormError>
-          </div>
+          <FormError id="monitor-error">{error}</FormError>
         )}
 
         <Toggle
@@ -400,9 +398,7 @@ function WebhookPanel() {
       />
       <form onSubmit={save} className="space-y-4">
         {error && (
-          <div id="webhook-error" role="alert">
-            <FormError>{error}</FormError>
-          </div>
+          <FormError id="webhook-error">{error}</FormError>
         )}
 
         <Toggle
@@ -518,6 +514,7 @@ export default function Page() {
       await createUser(newEmail, newPassword, newRole);
       setNewEmail("");
       setNewPassword("");
+      setError(null);
       await reload();
       toast({ title: "User created.", tone: "ok" });
     } catch (err) {
@@ -539,6 +536,7 @@ export default function Page() {
       const created = await createApiKey(newKeyName, newKeyRole);
       setCreatedKey(created.key);
       setNewKeyName("");
+      setError(null);
       await reload();
       toast({ title: "API key created.", tone: "ok" });
     } catch (err) {
@@ -638,9 +636,7 @@ export default function Page() {
         ) : (
           <>
             {error && (
-              <div id="admin-error" role="alert">
-                <FormError>{error}</FormError>
-              </div>
+              <FormError id="admin-error">{error}</FormError>
             )}
 
             <WebhookPanel />
@@ -702,6 +698,8 @@ export default function Page() {
                     type="password"
                     placeholder="Initial password"
                     aria-label="Initial password"
+                    aria-invalid={!!error}
+                    aria-describedby={error ? "admin-error" : undefined}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     minLength={10}

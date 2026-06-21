@@ -525,12 +525,12 @@ export function VulnsView() {
       header: "Confidence",
       render: (v) => (
         <Tooltip content={confidenceHint[v.confidence]}>
-          <button
-            type="button"
+          <span
+            tabIndex={0}
             className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
           >
             {confidenceLabel[v.confidence]}
-          </button>
+          </span>
         </Tooltip>
       ),
     },
@@ -763,12 +763,12 @@ export function VulnsView() {
                           <Badge tone="danger">Still detected</Badge>
                         ) : null}
                         <Tooltip content={confidenceHint[a.match_confidence]}>
-                          <button
-                            type="button"
+                          <span
+                            tabIndex={0}
                             className="cursor-help text-xs text-muted underline decoration-dotted underline-offset-2"
                           >
                             {confidenceLabel[a.match_confidence]}
-                          </button>
+                          </span>
                         </Tooltip>
                         <RiskBadge band={a.band} value={a.risk} />
                       </span>
