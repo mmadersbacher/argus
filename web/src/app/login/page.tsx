@@ -5,10 +5,17 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BrandTile } from "@/components/argus-mark";
-import { Button, Field, FormError, Input } from "@/components/ui";
+import { Button, Field, FormError, Input, Tabs, TabPanel } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 
 type Mode = "login" | "register";
+
+const LOGIN_TABS = [
+  { id: "login", label: "Sign in" },
+  { id: "register", label: "Create organization" },
+];
+
+const ERROR_ID = "login-form-error";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,6 +30,11 @@ export default function LoginPage() {
   useEffect(() => {
     if (ready && session) router.replace("/");
   }, [ready, session, router]);
+
+  const handleModeChange = (id: string) => {
+    setMode(id as Mode);
+    setError(null);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,23 +54,9 @@ export default function LoginPage() {
     }
   };
 
-  const tab = (m: Mode, label: string) => (
-    <button
-      type="button"
-      aria-pressed={mode === m}
-      onClick={() => {
-        setMode(m);
-        setError(null);
-      }}
-      className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        mode === m
-          ? "bg-surface text-fg shadow-sm"
-          : "text-muted hover:text-fg"
-      }`}
-    >
-      {label}
-    </button>
-  );
+  const inputErrorProps = error
+    ? { "aria-invalid": true as const, "aria-describedby": ERROR_ID }
+    : {};
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg p-6">
@@ -76,23 +74,30 @@ export default function LoginPage() {
 
         <div className="rounded-xl border border-line bg-surface p-6 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
           {/* mode switch */}
-          <div className="mb-5 flex gap-1 rounded-lg bg-surface-2 p-1">
-            {tab("login", "Sign in")}
-            {tab("register", "Create organization")}
+          <div className="mb-5">
+            <Tabs
+              tabs={LOGIN_TABS}
+              active={mode}
+              onChange={handleModeChange}
+            />
           </div>
 
           <form onSubmit={submit} className="space-y-4">
-            {mode === "register" && (
-              <Field label="Organization name">
-                <Input
-                  placeholder="Acme Corp"
-                  value={organization}
-                  onChange={(e) => setOrganization(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </Field>
-            )}
+            <TabPanel when="register" active={mode}>
+              <div className="space-y-4">
+                <Field label="Organization name">
+                  <Input
+                    placeholder="Acme Corp"
+                    value={organization}
+                    onChange={(e) => setOrganization(e.target.value)}
+                    required
+                    autoFocus
+                    {...inputErrorProps}
+                  />
+                </Field>
+              </div>
+            </TabPanel>
+
             <Field label="Email">
               <Input
                 type="email"
@@ -101,6 +106,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoComplete="email"
+                {...inputErrorProps}
               />
             </Field>
             <Field
@@ -116,10 +122,11 @@ export default function LoginPage() {
                 autoComplete={
                   mode === "register" ? "new-password" : "current-password"
                 }
+                {...inputErrorProps}
               />
             </Field>
 
-            {error && <FormError>{error}</FormError>}
+            {error && <FormError id={ERROR_ID}>{error}</FormError>}
 
             <Button type="submit" disabled={busy} className="w-full">
               {busy
