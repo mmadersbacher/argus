@@ -14,6 +14,7 @@ import {
   TabPanel,
   Pagination,
   Tooltip,
+  Menu,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -189,6 +190,36 @@ export default function UiGallery() {
           <Tooltip content="Left tooltip" side="left">
             <Button variant="secondary">Left</Button>
           </Tooltip>
+        </div>
+      </Panel>
+      <Panel title="Menu">
+        <div className="flex gap-4 items-start flex-wrap">
+          <Menu
+            trigger="Actions"
+            items={[
+              { label: "Edit", onSelect: () => alert("Edit clicked") },
+              { label: "Duplicate", onSelect: () => alert("Duplicate clicked") },
+              { separator: true },
+              { label: "Delete", tone: "danger", onSelect: () => alert("Delete clicked") },
+            ]}
+          />
+          <Menu
+            trigger="Aligned end"
+            align="end"
+            items={[
+              { label: "View details", onSelect: () => alert("View details") },
+              { label: "Export", onSelect: () => alert("Export") },
+              { separator: true },
+              { label: "Archive", tone: "danger", onSelect: () => alert("Archive") },
+            ]}
+          />
+          <Menu
+            trigger="With disabled"
+            items={[
+              { label: "Enabled action", onSelect: () => alert("Enabled") },
+              { label: "Disabled action", disabled: true, onSelect: () => {} },
+            ]}
+          />
         </div>
       </Panel>
     </div>

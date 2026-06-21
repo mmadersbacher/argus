@@ -12,8 +12,10 @@ import {
   useDismiss as useFloatingDismiss,
   useRole,
   useInteractions,
+  useClick,
+  FloatingFocusManager,
 } from "@floating-ui/react";
-import { Icon } from "@/components/icon";
+import { Icon, type IconName } from "@/components/icon";
 import { cx, focusRing } from "./internal";
 import { useDismiss, useFocusTrap } from "./overlay-core";
 import { buttonVariants } from "./controls";
@@ -150,6 +152,90 @@ export function Tooltip({
         >
           {content}
         </div>
+      )}
+    </>
+  );
+}
+
+export type MenuItem =
+  | { label: string; icon?: IconName; onSelect: () => void; tone?: "default" | "danger"; disabled?: boolean }
+  | { separator: true };
+
+export function Menu({
+  trigger,
+  items,
+  align = "start",
+}: {
+  trigger: React.ReactNode;
+  items: MenuItem[];
+  align?: "start" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange: setOpen,
+    placement: align === "end" ? "bottom-end" : "bottom-start",
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(4), flip(), shift({ padding: 6 })],
+  });
+  const click = useClick(context);
+  const menuDismiss = useFloatingDismiss(context);
+  const menuRole = useRole(context, { role: "menu" });
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    click,
+    menuDismiss,
+    menuRole,
+  ]);
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={refs.setReference}
+        {...getReferenceProps()}
+        className={cx(
+          "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
+          focusRing,
+          buttonVariants.secondary,
+        )}
+      >
+        {trigger}
+      </button>
+      {open && (
+        <FloatingFocusManager context={context} modal={false}>
+          <div
+            ref={refs.setFloating}
+            style={floatingStyles}
+            {...getFloatingProps()}
+            className="z-50 min-w-40 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg"
+          >
+            {items.map((it, i) =>
+              "separator" in it ? (
+                <div key={i} className="my-1 border-t border-line" />
+              ) : (
+                <button
+                  key={i}
+                  role="menuitem"
+                  type="button"
+                  disabled={it.disabled}
+                  onClick={() => {
+                    it.onSelect();
+                    setOpen(false);
+                  }}
+                  className={cx(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors disabled:opacity-50",
+                    it.tone === "danger"
+                      ? "text-crit hover:bg-crit/10"
+                      : "text-fg hover:bg-surface-2",
+                  )}
+                >
+                  {it.icon ? <Icon name={it.icon} size={15} /> : null}
+                  {it.label}
+                </button>
+              ),
+            )}
+          </div>
+        </FloatingFocusManager>
       )}
     </>
   );
