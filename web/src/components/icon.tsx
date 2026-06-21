@@ -25,7 +25,10 @@ export type IconName =
   | "eye"
   | "eye-off"
   | "info"
-  | "spinner";
+  | "spinner"
+  | "sun"
+  | "moon"
+  | "monitor";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = {
@@ -225,6 +228,26 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       return (
         <svg {...common} className="argus-spin">
           <path d="M12 3a9 9 0 1 0 9 9" />
+        </svg>
+      );
+    case "sun":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+        </svg>
+      );
+    case "moon":
+      return (
+        <svg {...common}>
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      );
+    case "monitor":
+      return (
+        <svg {...common}>
+          <rect x="2" y="3" width="20" height="14" rx="2" />
+          <path d="M8 21h8M12 17v4" />
         </svg>
       );
     default:

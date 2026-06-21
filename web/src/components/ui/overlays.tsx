@@ -272,10 +272,15 @@ export function Menu({
   trigger,
   items,
   align = "start",
+  header,
+  triggerClassName,
 }: {
   trigger: React.ReactNode;
   items: MenuItem[];
   align?: "start" | "end";
+  header?: React.ReactNode;
+  /** Override the default secondary-button styling on the trigger wrapper. */
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
@@ -300,11 +305,14 @@ export function Menu({
         type="button"
         ref={refs.setReference}
         {...getReferenceProps()}
-        className={cx(
-          "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
-          focusRing,
-          buttonVariants.secondary,
-        )}
+        className={
+          triggerClassName ??
+          cx(
+            "inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-sm",
+            focusRing,
+            buttonVariants.secondary,
+          )
+        }
       >
         {trigger}
       </button>
@@ -319,6 +327,12 @@ export function Menu({
               {...getFloatingProps()}
               className="z-50 min-w-40 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg"
             >
+              {header ? (
+                <>
+                  {header}
+                  <div role="separator" className="my-1 border-t border-line" />
+                </>
+              ) : null}
               {items.map((it, i) =>
                 "separator" in it ? (
                   <div key={`separator-${i}`} role="separator" className="my-1 border-t border-line" />

@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ---- Argus Console v2 design tokens ----------------------------------------
    Calm, dense, professional light theme. Royal-blue accent, deep-navy sidebar.
    Consumed exclusively through Tailwind utilities (bg-surface, text-muted,
@@ -43,6 +45,32 @@
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/* ---- Dark mode token overrides -----------------------------------------------
+   Applied when <html> carries the .dark class (set by ThemeProvider +
+   no-flash script). Sidebar tokens are intentionally unchanged — they are
+   already dark. Risk colors are brightened for 4.5:1 contrast on dark surfaces. */
+.dark {
+  --color-bg: #0b1220;
+  --color-surface: #121a2b;
+  --color-surface-2: #1a2438;
+  --color-line: #2a3a55;
+  --color-line-strong: #3a4f70;
+  --color-fg: #e8eef7;
+  --color-fg-2: #b0bfd4;
+  --color-muted: #7a90b0;
+  --color-faint: #4a5f80;
+  --color-accent: #60a5fa;
+  --color-accent-2: #3b82f6;
+  --color-accent-soft: #1e3a6e;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-crit: #f87171;
+  --color-high: #fb923c;
+  --color-med: #facc15;
+  --color-low: #4ade80;
+  --color-info: #67e8f9;
 }
 
 html,
