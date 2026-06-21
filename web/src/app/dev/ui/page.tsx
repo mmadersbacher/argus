@@ -12,6 +12,7 @@ import {
   SkeletonTable,
   Tabs,
   TabPanel,
+  Pagination,
 } from "@/components/ui";
 import { useState } from "react";
 
@@ -21,6 +22,7 @@ export default function UiGallery() {
   const [indeterminateValue, setIndeterminateValue] = useState(false);
   const [radioValue, setRadioValue] = useState("option1");
   const [activeTab, setActiveTab] = useState("tab1");
+  const [currentPage, setCurrentPage] = useState(1);
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -164,6 +166,13 @@ export default function UiGallery() {
       </Panel>
       <Panel title="SkeletonTable">
         <SkeletonTable rows={3} cols={4} />
+      </Panel>
+      <Panel title="Pagination">
+        <Pagination
+          page={currentPage}
+          pageCount={5}
+          onPageChange={setCurrentPage}
+        />
       </Panel>
     </div>
   );
