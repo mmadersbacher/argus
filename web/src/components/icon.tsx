@@ -20,7 +20,12 @@ export type IconName =
   | "external"
   | "file"
   | "logout"
-  | "graph";
+  | "graph"
+  | "copy"
+  | "eye"
+  | "eye-off"
+  | "info"
+  | "spinner";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = {
@@ -184,6 +189,42 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
           <circle cx="18" cy="9" r="2.3" />
           <circle cx="9.5" cy="18" r="2.3" />
           <path d="M8 7.3 15.8 8.5M7.2 8.4 8.6 15.8M11.4 16.8 16.3 10.7" />
+        </svg>
+      );
+    case "copy":
+      return (
+        <svg {...common}>
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V5a2 2 0 0 1 2-2h8" />
+        </svg>
+      );
+    case "eye":
+      return (
+        <svg {...common}>
+          <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      );
+    case "eye-off":
+      return (
+        <svg {...common}>
+          <path d="M4 4l16 16" />
+          <path d="M9.6 9.7A3 3 0 0 0 14.3 14.4" />
+          <path d="M6.6 6.7C4.2 8.2 2.5 12 2.5 12s3.5 6.5 9.5 6.5c1.6 0 3-.4 4.2-1" />
+          <path d="M9.9 5.7A8.7 8.7 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.4 3.1" />
+        </svg>
+      );
+    case "info":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5M12 8h.01" />
+        </svg>
+      );
+    case "spinner":
+      return (
+        <svg {...common} className="argus-spin">
+          <path d="M12 3a9 9 0 1 0 9 9" />
         </svg>
       );
     default:

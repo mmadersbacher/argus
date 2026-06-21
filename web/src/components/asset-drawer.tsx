@@ -12,6 +12,7 @@ import {
   type Criticality,
   type Exposure,
   type ScoredAsset,
+  type Service,
   type Vulnerability,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -24,7 +25,7 @@ import {
   formatEpss,
   isConfirmedConfidence,
 } from "@/lib/ui";
-import { Badge, Drawer, Select } from "@/components/ui";
+import { Badge, Drawer, Field, Panel, Select, Table, type Column } from "@/components/ui";
 import { RiskBadge, SeverityBadge } from "@/components/risk-badge";
 
 const CRITICALITIES: Criticality[] = ["low", "medium", "high", "critical"];
@@ -84,43 +85,33 @@ function VulnSection({ vulns }: { vulns: Vulnerability[] }) {
         <p className="mt-2 text-sm text-muted">No known CVEs.</p>
       ) : (
         <div className="mt-3 space-y-4">
-          <div>
-            <p className="text-xs font-medium text-fg-2">
-              Confirmed{" "}
-              <span className="tabular-nums text-muted">({confirmed.length})</span>
-              <span className="ml-2 font-normal text-muted">
-                version-checked — drives the risk score
-              </span>
-            </p>
+          <Panel
+            title={`Confirmed (${confirmed.length})`}
+            description="version-checked — drives the risk score"
+            bodyClassName="p-3"
+          >
             {confirmed.length === 0 ? (
-              <p className="mt-1.5 text-sm text-muted">
-                No confirmed vulnerabilities.
-              </p>
+              <p className="text-sm text-muted">No confirmed vulnerabilities.</p>
             ) : (
-              <ul className="mt-1.5 space-y-2">
+              <ul className="space-y-2">
                 {confirmed.map((v) => (
                   <VulnItem key={v.cve_id} v={v} />
                 ))}
               </ul>
             )}
-          </div>
+          </Panel>
           {potential.length > 0 && (
-            <div className="opacity-80">
-              <p className="text-xs font-medium text-fg-2">
-                Potential{" "}
-                <span className="tabular-nums text-muted">
-                  ({potential.length})
-                </span>
-                <span className="ml-2 font-normal text-muted">
-                  product present, version unverified — verify, not scored
-                </span>
-              </p>
-              <ul className="mt-1.5 space-y-2">
+            <Panel
+              title={`Potential (${potential.length})`}
+              description="product present, version unverified — verify, not scored"
+              bodyClassName="p-3 opacity-80"
+            >
+              <ul className="space-y-2">
                 {potential.map((v) => (
                   <VulnItem key={v.cve_id} v={v} />
                 ))}
               </ul>
-            </div>
+            </Panel>
           )}
         </div>
       )}
@@ -183,11 +174,9 @@ function BusinessContext({
     <section>
       <Overline>Business context</Overline>
       <div className="mt-2 grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-            Criticality
-            {asset.overrides.criticality ? " · set by analyst" : ""}
-          </span>
+        <Field
+          label={`Criticality${asset.overrides.criticality ? " · set by analyst" : ""}`}
+        >
           <Select
             value={asset.criticality}
             disabled={saving}
@@ -202,12 +191,10 @@ function BusinessContext({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-            Exposure
-            {asset.overrides.exposure ? " · set by analyst" : ""}
-          </span>
+        </Field>
+        <Field
+          label={`Exposure${asset.overrides.exposure ? " · set by analyst" : ""}`}
+        >
           <Select
             value={asset.exposure}
             disabled={saving}
@@ -222,7 +209,7 @@ function BusinessContext({
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
       </div>
       <p className="mt-1.5 text-[11px] text-muted">
         Drives the risk score; survives re-scans.
@@ -235,6 +222,29 @@ function BusinessContext({
 function dash(value: string | null | undefined): string {
   return value && value.length > 0 ? value : "—";
 }
+
+const SERVICE_COLUMNS: Column<Service>[] = [
+  {
+    key: "port",
+    header: "Port",
+    numeric: true,
+    render: (s) => (
+      <span className="font-mono text-xs tabular-nums">{s.port}</span>
+    ),
+  },
+  {
+    key: "protocol",
+    header: "Protocol",
+    render: (s) => (
+      <span className="text-xs uppercase text-muted">{s.protocol}</span>
+    ),
+  },
+  {
+    key: "product",
+    header: "Product",
+    render: (s) => <span className="text-xs text-fg-2">{dash(s.product)}</span>,
+  },
+];
 
 function Overline({ children }: { children: React.ReactNode }) {
   return (
@@ -332,33 +342,12 @@ export function AssetDrawer({
           <p className="mt-2 text-sm text-muted">No services observed.</p>
         ) : (
           <div className="mt-2 overflow-hidden rounded-lg border border-line">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-line bg-surface-2/60 text-left text-xs text-muted">
-                  <th className="px-3 py-2 font-medium">Port</th>
-                  <th className="px-3 py-2 font-medium">Protocol</th>
-                  <th className="px-3 py-2 font-medium">Product</th>
-                </tr>
-              </thead>
-              <tbody>
-                {asset.services.map((s) => (
-                  <tr
-                    key={`${s.protocol}-${s.port}`}
-                    className="border-b border-line last:border-0"
-                  >
-                    <td className="px-3 py-2 font-mono text-xs tabular-nums text-fg">
-                      {s.port}
-                    </td>
-                    <td className="px-3 py-2 text-xs uppercase text-muted">
-                      {s.protocol}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-fg-2">
-                      {dash(s.product)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table<Service>
+              columns={SERVICE_COLUMNS}
+              rows={asset.services}
+              getRowId={(s) => `${s.protocol}-${s.port}`}
+              density="compact"
+            />
           </div>
         )}
       </section>
