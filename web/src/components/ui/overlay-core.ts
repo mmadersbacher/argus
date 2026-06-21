@@ -4,6 +4,9 @@ import { createPortal } from "react-dom";
 
 export function Portal({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
+  // Standard client-only mount guard: defer the portal to the client so
+  // document.body is never touched during SSR. The one-time setState is intentional.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setMounted(true), []);
   return mounted ? createPortal(children, document.body) : null;
 }

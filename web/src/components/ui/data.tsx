@@ -88,7 +88,8 @@ export function Table<Row>({
   };
   const toggleOne = (id: string) => {
     const next = new Set(selection);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
     onSelectionChange!(next);
   };
   const colCount = columns.length + (selectable ? 1 : 0);

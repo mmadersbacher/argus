@@ -246,14 +246,18 @@ export function Tooltip({
         {children}
       </span>
       {open && (
-        <div
-          ref={refs.setFloating}
-          style={floatingStyles}
-          {...getFloatingProps()}
-          className="z-50 max-w-xs rounded-md bg-fg px-2 py-1 text-xs text-white shadow-md"
-        >
-          {content}
-        </div>
+        <>
+          <div
+            // refs.setFloating is floating-ui's callback ref setter, not a render-time ref read
+            // eslint-disable-next-line react-hooks/refs
+            ref={refs.setFloating}
+            style={floatingStyles}
+            {...getFloatingProps()}
+            className="z-50 max-w-xs rounded-md bg-fg px-2 py-1 text-xs text-white shadow-md"
+          >
+            {content}
+          </div>
+        </>
       )}
     </>
   );
@@ -306,6 +310,8 @@ export function Menu({
       {open && (
         <FloatingFocusManager context={context} modal={false}>
           <div
+            // refs.setFloating is floating-ui's callback ref setter, not a render-time ref read
+            // eslint-disable-next-line react-hooks/refs
             ref={refs.setFloating}
             style={floatingStyles}
             {...getFloatingProps()}
