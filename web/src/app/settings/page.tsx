@@ -26,6 +26,7 @@ import {
 import {
   Badge,
   Button,
+  ConfirmDialog,
   Field,
   FormError,
   Input,
@@ -34,8 +35,10 @@ import {
   Select,
   Toggle,
 } from "@/components/ui";
+import { Icon } from "@/components/icon";
 import { timeAgo } from "@/lib/ui";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/components/ui/toast";
 
 function RoleBadge({ role }: { role: Role }) {
   return (
@@ -101,10 +104,10 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
   const [deep, setDeep] = useState(false);
   const [lastRunAt, setLastRunAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const { toast } = useToast();
   const mounted = useRef(true);
   // Monotonic request id. Each issued request takes the next number; a response
   // is only adopted if nothing newer has already won, so a slow mount GET can
@@ -157,7 +160,6 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
     // result wins even if that older GET resolves afterwards.
     const requestSeq = ++seq.current;
     setBusy(true);
-    setSaved(false);
     try {
       const cfg = await saveMonitor({
         target: target.trim(),
@@ -168,13 +170,13 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
       adopt(cfg, requestSeq);
       if (mounted.current) {
         setError(null);
-        setSaved(true);
+        toast({ title: "Monitoring saved.", tone: "ok" });
       }
     } catch (err) {
       if (mounted.current) {
-        setError(
-          err instanceof Error ? err.message : "failed to save monitor config",
-        );
+        const msg = err instanceof Error ? err.message : "failed to save monitor config";
+        setError(msg);
+        toast({ title: "Failed to save monitoring.", description: msg, tone: "danger" });
       }
     } finally {
       if (mounted.current) setBusy(false);
@@ -191,7 +193,9 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
       description="Re-scan a target on a schedule; differences show up as events in the activity feed."
     >
       <form onSubmit={save} className="space-y-4">
-        {error && <FormError>{error}</FormError>}
+        {error && (
+          <FormError id="monitor-error">{error}</FormError>
+        )}
 
         <Toggle
           checked={enabled}
@@ -210,6 +214,8 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
                 onChange={(e) => setTarget(e.target.value)}
                 disabled={formDisabled}
                 aria-label="Monitor target"
+                aria-invalid={!!error}
+                aria-describedby={error ? "monitor-error" : undefined}
                 required
               />
             </Field>
@@ -249,7 +255,6 @@ function MonitoringPanel({ canEdit }: { canEdit: boolean }) {
           <Button type="submit" disabled={busy || formDisabled}>
             Save
           </Button>
-          {saved && <span className="text-xs font-medium text-ok">Saved.</span>}
           {lastRunAt && (
             <span className="text-xs text-muted">
               Last run {timeAgo(lastRunAt)}
@@ -272,10 +277,11 @@ function WebhookPanel() {
   const [secret, setSecret] = useState<string | null>(null);
   const [configured, setConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
+  const { toast } = useToast();
   const mounted = useRef(true);
   // Same monotonic request-id guard as MonitoringPanel: a slow mount GET must
   // never overwrite a freshly-saved value or current input.
@@ -321,16 +327,17 @@ function WebhookPanel() {
     e.preventDefault();
     const requestSeq = ++seq.current;
     setBusy(true);
-    setSaved(false);
     try {
       adopt(await saveWebhook(url.trim(), enabled), requestSeq);
       if (mounted.current) {
         setError(null);
-        setSaved(true);
+        toast({ title: "Webhook saved.", tone: "ok" });
       }
     } catch (err) {
       if (mounted.current) {
-        setError(err instanceof Error ? err.message : "failed to save webhook");
+        const msg = err instanceof Error ? err.message : "failed to save webhook";
+        setError(msg);
+        toast({ title: "Failed to save webhook.", description: msg, tone: "danger" });
       }
     } finally {
       if (mounted.current) setBusy(false);
@@ -340,7 +347,7 @@ function WebhookPanel() {
   const remove = async () => {
     const requestSeq = ++seq.current;
     setBusy(true);
-    setSaved(false);
+    setConfirmDeleteOpen(false);
     try {
       await deleteWebhook();
       adopt({ configured: false }, requestSeq);
@@ -348,14 +355,30 @@ function WebhookPanel() {
         setUrl("");
         setEnabled(true);
         setError(null);
+        toast({ title: "Webhook removed.", tone: "ok" });
       }
     } catch (err) {
       if (mounted.current) {
-        setError(err instanceof Error ? err.message : "failed to delete webhook");
+        const msg = err instanceof Error ? err.message : "failed to delete webhook";
+        setError(msg);
+        toast({ title: "Failed to remove webhook.", description: msg, tone: "danger" });
       }
     } finally {
       if (mounted.current) setBusy(false);
     }
+  };
+
+  const copySecret = () => {
+    if (!secret) return;
+    if (!navigator.clipboard) {
+      toast({ title: "Copy failed", tone: "danger" });
+      return;
+    }
+    void navigator.clipboard.writeText(secret).then(() => {
+      toast({ title: "Secret copied to clipboard.", tone: "ok" });
+    }).catch(() => {
+      toast({ title: "Failed to copy secret.", tone: "danger" });
+    });
   };
 
   return (
@@ -363,8 +386,20 @@ function WebhookPanel() {
       title="Webhook"
       description="POST change events to a URL after each scan, HMAC-SHA256-signed (x-argus-signature). Must be a public http(s) endpoint."
     >
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onConfirm={() => void remove()}
+        onCancel={() => setConfirmDeleteOpen(false)}
+        title="Remove webhook?"
+        body="This will permanently delete the webhook and its signing secret. Deliveries will stop immediately."
+        confirmLabel="Remove"
+        tone="danger"
+        busy={busy}
+      />
       <form onSubmit={save} className="space-y-4">
-        {error && <FormError>{error}</FormError>}
+        {error && (
+          <FormError id="webhook-error">{error}</FormError>
+        )}
 
         <Toggle
           checked={enabled}
@@ -382,18 +417,31 @@ function WebhookPanel() {
             onChange={(e) => setUrl(e.target.value)}
             disabled={loading}
             aria-label="Webhook URL"
+            aria-invalid={!!error}
+            aria-describedby={error ? "webhook-error" : undefined}
             required
           />
         </Field>
 
         {secret && (
           <Field label="Signing secret (verify x-argus-signature with this)">
-            <Input
-              className="font-mono"
-              value={secret}
-              readOnly
-              aria-label="Webhook signing secret"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                className="font-mono"
+                value={secret}
+                readOnly
+                aria-label="Webhook signing secret"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="Copy signing secret"
+                onClick={copySecret}
+              >
+                <Icon name="copy" size={15} />
+              </Button>
+            </div>
           </Field>
         )}
 
@@ -406,12 +454,11 @@ function WebhookPanel() {
               type="button"
               variant="danger"
               disabled={busy || loading}
-              onClick={() => void remove()}
+              onClick={() => setConfirmDeleteOpen(true)}
             >
               Remove
             </Button>
           )}
-          {saved && <span className="text-xs font-medium text-ok">Saved.</span>}
         </div>
       </form>
     </Panel>
@@ -436,6 +483,10 @@ export default function Page() {
   const [newKeyRole, setNewKeyRole] = useState<Role>("analyst");
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);
+
+  const { toast } = useToast();
 
   const reload = useCallback(async () => {
     try {
@@ -463,9 +514,13 @@ export default function Page() {
       await createUser(newEmail, newPassword, newRole);
       setNewEmail("");
       setNewPassword("");
+      setError(null);
       await reload();
+      toast({ title: "User created.", tone: "ok" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to create user");
+      const msg = err instanceof Error ? err.message : "failed to create user";
+      setError(msg);
+      toast({ title: "Failed to create user.", description: msg, tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -481,23 +536,47 @@ export default function Page() {
       const created = await createApiKey(newKeyName, newKeyRole);
       setCreatedKey(created.key);
       setNewKeyName("");
+      setError(null);
       await reload();
+      toast({ title: "API key created.", tone: "ok" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to create key");
+      const msg = err instanceof Error ? err.message : "failed to create key";
+      setError(msg);
+      toast({ title: "Failed to create API key.", description: msg, tone: "danger" });
     } finally {
       setBusy(false);
     }
   };
 
   const revokeKey = async (id: string) => {
+    setPendingRevokeId(null);
+    setRevoking(true);
     try {
       await deleteApiKey(id);
       // Clear the one-time banner so a revoked key's plaintext isn't left on screen.
       setCreatedKey(null);
       await reload();
+      toast({ title: "API key revoked.", tone: "ok" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to revoke key");
+      const msg = err instanceof Error ? err.message : "failed to revoke key";
+      setError(msg);
+      toast({ title: "Failed to revoke API key.", description: msg, tone: "danger" });
+    } finally {
+      setRevoking(false);
     }
+  };
+
+  const copyCreatedKey = () => {
+    if (!createdKey) return;
+    if (!navigator.clipboard) {
+      toast({ title: "Copy failed", tone: "danger" });
+      return;
+    }
+    void navigator.clipboard.writeText(createdKey).then(() => {
+      toast({ title: "API key copied to clipboard.", tone: "ok" });
+    }).catch(() => {
+      toast({ title: "Failed to copy API key.", tone: "danger" });
+    });
   };
 
   const roleSelect = (
@@ -531,6 +610,17 @@ export default function Page() {
         description="Continuous monitoring, users and machine credentials for your organization."
       />
 
+      <ConfirmDialog
+        open={pendingRevokeId !== null}
+        onConfirm={() => { if (pendingRevokeId) void revokeKey(pendingRevokeId); }}
+        onCancel={() => setPendingRevokeId(null)}
+        title="Revoke API key?"
+        body="This key will stop working immediately. Any integrations using it will break."
+        confirmLabel="Revoke"
+        tone="danger"
+        busy={revoking}
+      />
+
       <div className="space-y-6">
         <AccountPanel />
 
@@ -545,7 +635,9 @@ export default function Page() {
           </Panel>
         ) : (
           <>
-            {error && <FormError>{error}</FormError>}
+            {error && (
+              <FormError id="admin-error">{error}</FormError>
+            )}
 
             <WebhookPanel />
 
@@ -594,6 +686,8 @@ export default function Page() {
                     type="email"
                     placeholder="email@company.com"
                     aria-label="New user email"
+                    aria-invalid={!!error}
+                    aria-describedby={error ? "admin-error" : undefined}
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
                     required
@@ -604,6 +698,8 @@ export default function Page() {
                     type="password"
                     placeholder="Initial password"
                     aria-label="Initial password"
+                    aria-invalid={!!error}
+                    aria-describedby={error ? "admin-error" : undefined}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     minLength={10}
@@ -627,9 +723,20 @@ export default function Page() {
                   <p className="text-xs font-medium text-accent">
                     New key — copy now, it is shown only once:
                   </p>
-                  <p className="mt-1 select-all break-all font-mono text-xs text-fg">
-                    {createdKey}
-                  </p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <p className="select-all break-all font-mono text-xs text-fg">
+                      {createdKey}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Copy API key"
+                      onClick={copyCreatedKey}
+                    >
+                      <Icon name="copy" size={15} />
+                    </Button>
+                  </div>
                 </div>
               )}
               <div className="overflow-x-auto">
@@ -665,7 +772,7 @@ export default function Page() {
                               type="button"
                               variant="danger"
                               size="sm"
-                              onClick={() => void revokeKey(k.id)}
+                              onClick={() => setPendingRevokeId(k.id)}
                             >
                               Revoke
                             </Button>
@@ -684,6 +791,8 @@ export default function Page() {
                   <Input
                     placeholder="Key name (e.g. ci-importer)"
                     aria-label="Key name"
+                    aria-invalid={!!error}
+                    aria-describedby={error ? "admin-error" : undefined}
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
                     required

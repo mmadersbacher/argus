@@ -12,13 +12,24 @@ import {
 } from "@/lib/ui";
 import { useInventory } from "@/lib/use-inventory";
 import { useEvents } from "@/lib/use-events";
-import { Badge, PageHeader, Panel, StatCard } from "@/components/ui";
+import {
+  Badge,
+  Column,
+  PageHeader,
+  Panel,
+  SkeletonTable,
+  SortState,
+  StatCard,
+  Table,
+  Tooltip,
+} from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { LiveRegion } from "@/components/live-region";
 import { RiskBadge } from "@/components/risk-badge";
 import { RiskDistribution } from "@/components/risk-distribution";
 import { AssetDrawer } from "@/components/asset-drawer";
-import { EmptyState, ErrorState, LoadingState } from "@/components/states";
+import { EmptyState, ErrorState } from "@/components/states";
+import type { ScoredAsset } from "@/lib/api";
 
 /** Mirrors RiskBand::from_value in crates/argus-core/src/risk.rs. */
 function bandFromValue(value: number): RiskBand {
@@ -50,6 +61,7 @@ export function RiskView() {
   // Drawer selection by id, never by object: the asset is re-derived from the
   // latest poll data, so the drawer always shows fresh values.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>({ key: "risk", dir: "desc" });
 
   // If the selected asset disappears after a poll, close the drawer.
   useEffect(() => {
@@ -59,7 +71,28 @@ export function RiskView() {
     }
   }, [assets, selectedId]);
 
-  if (loading) return <LoadingState />;
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="argus-rise">
+          <PageHeader
+            title="Risk"
+            description="Heuristic exposure scoring across the inventory"
+          />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              className="h-24 animate-pulse rounded-xl bg-surface-2"
+            />
+          ))}
+        </div>
+        <SkeletonTable rows={10} cols={5} />
+      </div>
+    );
+  }
   if (error) return <ErrorState message={error} />;
 
   const selected =
@@ -88,8 +121,26 @@ export function RiskView() {
       (a.risk.band === "critical" || a.risk.band === "high"),
   ).length;
 
+  // Sort top assets — nulls-last for risk score in both directions.
   const topAssets = [...assets]
-    .sort((a, b) => b.risk.value - a.risk.value)
+    .sort((a, b) => {
+      const dir = sort.dir === "asc" ? 1 : -1;
+      if (sort.key === "name") {
+        const na = a.fingerprint.device_type ?? null;
+        const nb = b.fingerprint.device_type ?? null;
+        if (na === null && nb === null) return 0;
+        if (na === null) return 1; // nulls last regardless of direction
+        if (nb === null) return -1;
+        return dir * na.localeCompare(nb);
+      }
+      // sort.key === "risk" (default)
+      const va = a.risk.value ?? null;
+      const vb = b.risk.value ?? null;
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1; // nulls last regardless of direction
+      if (vb === null) return -1;
+      return dir * (va - vb);
+    })
     .slice(0, 10);
 
   // Runtime guard (same spirit as activity-feed): a version-skewed API or a
@@ -102,6 +153,85 @@ export function RiskView() {
       e.detail.old_band in bandStyles &&
       e.detail.new_band in bandStyles,
   );
+
+  // Column definitions for the top-risk Table
+  const columns: Column<ScoredAsset>[] = [
+    {
+      key: "name",
+      header: "Asset",
+      sortable: true,
+      render: (a) => {
+        const sub = [a.fingerprint.vendor, a.fingerprint.os]
+          .filter(Boolean)
+          .join(" · ");
+        return (
+          <div className="flex items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
+              <Icon name={assetTypeIcon[a.asset_type]} size={16} />
+            </span>
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => setSelectedId(a.id)}
+                className="block max-w-full truncate rounded text-left font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {a.fingerprint.device_type ?? "Unknown device"}
+              </button>
+              <div className="truncate text-xs text-muted">{sub || "—"}</div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "type",
+      header: "Type",
+      render: (a) => <Badge>{assetTypeLabel[a.asset_type]}</Badge>,
+    },
+    {
+      key: "exposure",
+      header: "Exposure",
+      render: (a) => (
+        <span className="text-xs text-fg-2">{exposureLabel[a.exposure]}</span>
+      ),
+    },
+    {
+      key: "cves",
+      header: "CVEs",
+      render: (a) => {
+        const hasKev = a.vulnerabilities.some((v) => v.kev);
+        return a.vulnerabilities.length === 0 ? (
+          <span className="text-muted">—</span>
+        ) : (
+          <span className="flex items-center gap-2">
+            <span className="tabular-nums text-fg-2">
+              {a.vulnerabilities.length}
+            </span>
+            {hasKev ? <Badge tone="danger">KEV</Badge> : null}
+          </span>
+        );
+      },
+    },
+    {
+      key: "risk",
+      header: "Risk",
+      sortable: true,
+      numeric: true,
+      render: (a) => (
+        <div className="flex items-center justify-end gap-3">
+          <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2">
+            <span
+              className={`block h-full rounded-full ${bandStyles[a.risk.band].bar}`}
+              style={{
+                width: `${Math.min(100, Math.max(0, a.risk.value))}%`,
+              }}
+            />
+          </span>
+          <RiskBadge band={a.risk.band} value={a.risk.value} />
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -141,10 +271,20 @@ export function RiskView() {
         />
       </div>
 
-      <p className="text-xs text-muted">
-        Risk is a <span className="font-medium text-fg-2">heuristic</span> 0–100
-        composite of CVSS severity, network exposure, and asset criticality — an
-        opinionated weighting, not a calibrated or trained model.
+      <p className="flex items-center gap-1.5 text-xs text-muted">
+        Risk is a{" "}
+        <Tooltip
+          content="0–100 composite of CVSS severity, network exposure, and asset criticality — an opinionated weighting, not a calibrated or trained model."
+          side="top"
+        >
+          <span
+            tabIndex={0}
+            className="cursor-help font-medium text-fg-2 underline decoration-dotted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded"
+          >
+            heuristic
+          </span>
+        </Tooltip>{" "}
+        0–100 composite score.
       </p>
 
       <Panel
@@ -170,88 +310,14 @@ export function RiskView() {
             hint="Run a discovery scan or import nmap XML on the Assets page to populate the inventory."
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-line bg-surface-2/60 text-left text-xs text-muted">
-                  <th className="px-4 py-3 font-medium">Asset</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
-                  <th className="px-4 py-3 font-medium">Exposure</th>
-                  <th className="px-4 py-3 font-medium">CVEs</th>
-                  <th className="px-4 py-3 text-right font-medium">Risk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topAssets.map((a) => {
-                  const sub = [a.fingerprint.vendor, a.fingerprint.os]
-                    .filter(Boolean)
-                    .join(" · ");
-                  const hasKev = a.vulnerabilities.some((v) => v.kev);
-                  return (
-                    <tr
-                      key={a.id}
-                      onClick={() => setSelectedId(a.id)}
-                      className="cursor-pointer border-b border-line transition-colors last:border-0 hover:bg-surface-2/60"
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
-                            <Icon name={assetTypeIcon[a.asset_type]} size={16} />
-                          </span>
-                          <div className="min-w-0">
-                            {/* Keyboard path into the drawer: the row onClick
-                                stays as mouse comfort, the title is the real
-                                interactive element. */}
-                            <button
-                              type="button"
-                              onClick={() => setSelectedId(a.id)}
-                              className="block w-full truncate rounded text-left font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                            >
-                              {a.fingerprint.device_type ?? "Unknown device"}
-                            </button>
-                            <div className="truncate text-xs text-muted">
-                              {sub || "—"}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge>{assetTypeLabel[a.asset_type]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-fg-2">
-                        {exposureLabel[a.exposure]}
-                      </td>
-                      <td className="px-4 py-3">
-                        {a.vulnerabilities.length === 0 ? (
-                          <span className="text-muted">—</span>
-                        ) : (
-                          <span className="flex items-center gap-2">
-                            <span className="tabular-nums text-fg-2">
-                              {a.vulnerabilities.length}
-                            </span>
-                            {hasKev ? <Badge tone="danger">KEV</Badge> : null}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-3">
-                          <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2">
-                            <span
-                              className={`block h-full rounded-full ${bandStyles[a.risk.band].bar}`}
-                              style={{
-                                width: `${Math.min(100, Math.max(0, a.risk.value))}%`,
-                              }}
-                            />
-                          </span>
-                          <RiskBadge band={a.risk.band} value={a.risk.value} />
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <Table<ScoredAsset>
+            columns={columns}
+            rows={topAssets}
+            getRowId={(a) => a.id}
+            sort={sort}
+            onSortChange={setSort}
+            density="compact"
+          />
         )}
       </Panel>
 
@@ -284,14 +350,19 @@ export function RiskView() {
                   </span>
                   <span className="flex shrink-0 items-center gap-2">
                     <RiskBadge band={d.old_band} />
-                    <span
-                      className={`inline-flex -rotate-90 ${
-                        worsened ? "text-crit" : "text-ok"
-                      }`}
-                      aria-hidden
+                    <Tooltip
+                      content={worsened ? "Risk worsened" : "Risk improved"}
+                      side="top"
                     >
-                      <Icon name="chevron" size={14} />
-                    </span>
+                      <span
+                        className={`inline-flex -rotate-90 cursor-default rounded ${
+                          worsened ? "text-crit" : "text-ok"
+                        }`}
+                        aria-hidden
+                      >
+                        <Icon name="chevron" size={14} />
+                      </span>
+                    </Tooltip>
                     <span className="sr-only">
                       {worsened ? "risk increased" : "risk decreased"}
                     </span>
