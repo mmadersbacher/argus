@@ -43,6 +43,18 @@ services:
         ipv4_address: 172.30.0.30
     restart: unless-stopped
 
+  fileserver:
+    image: dperson/samba
+    # Modern Samba (SMB2/3) standing in for a school NAS / file server. Default
+    # server signing is NOT required -> the SMB-signing posture finding, and a
+    # live SMB2 target for the negotiate probe (metasploitable's Samba 3.0.20 is
+    # SMBv1-only and won't answer SMB2).
+    command: -s "public;/tmp;yes;no;yes"
+    networks:
+      simnet:
+        ipv4_address: 172.30.0.40
+    restart: unless-stopped
+
 networks:
   simnet:
     driver: bridge
