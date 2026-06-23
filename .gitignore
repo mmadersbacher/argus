@@ -23,3 +23,6 @@ node_modules
 
 # Runtime IntelCache snapshot (written to cwd by argus-api)
 intel-cache.json
+deploy/school/.env.school
+# School appliance: real env stays ignored (.env.*); template is tracked.
+!deploy/school/.env.school.example

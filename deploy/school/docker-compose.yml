@@ -1,0 +1,58 @@
+# Argus School Edition — single-tenant, self-hosted appliance.
+# Internal LAN scanning ON; no self-service signup; no demo data.
+# Run from repo root:
+#   docker compose -f deploy/school/docker-compose.yml --env-file deploy/school/.env.school up -d
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: argus
+    volumes:
+      - argus-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://argus:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/argus
+      ARGUS_BIND: 0.0.0.0:8088
+      RUST_LOG: info
+      ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?set a 32+ char secret}
+      ARGUS_CORS_ORIGIN: ${ARGUS_CORS_ORIGIN:-http://localhost:3000}
+      ARGUS_ADMIN_EMAIL: ${ARGUS_ADMIN_EMAIL:?set the school admin email}
+      ARGUS_ADMIN_PASSWORD: ${ARGUS_ADMIN_PASSWORD:?set the school admin password}
+      # Appliance profile: single tenant, no demo, internal scanning ON.
+      ARGUS_SIGNUP_ENABLED: "false"
+      ARGUS_SEED_DEMO: "false"
+      ARGUS_SCAN_ALLOW_PRIVATE: "true"
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      ARGUS_INTEL_CACHE: /var/lib/argus/intel-cache.json
+    volumes:
+      - argus-intel:/var/lib/argus
+    ports:
+      - "8088:8088"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../../web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8088
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  argus-pgdata:
+  argus-intel:

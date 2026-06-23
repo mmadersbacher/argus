@@ -138,3 +138,21 @@ best-effort and fire-and-forget — webhook trouble never delays or fails a scan
 cargo run -p argus-api          # :8088
 cd web && npm run dev           # :3000
 ```
+
+## School Edition (single-tenant appliance)
+
+The School Edition runs the same image as a self-hosted, single-tenant appliance
+inside the school LAN. Data never leaves the appliance.
+
+    cp deploy/school/.env.school.example deploy/school/.env.school
+    # edit deploy/school/.env.school (secrets, admin, CORS origin)
+    docker compose -f deploy/school/docker-compose.yml --env-file deploy/school/.env.school up -d
+
+Profile differences vs. the SaaS compose: self-service signup is OFF
+(`ARGUS_SIGNUP_ENABLED=false`), demo seeding is OFF (`ARGUS_SEED_DEMO=false`),
+and internal LAN scanning is ON (`ARGUS_SCAN_ALLOW_PRIVATE=true`) — required so
+the appliance can inventory the school's own RFC1918 network. The first-run
+admin is created from `ARGUS_ADMIN_EMAIL`/`ARGUS_ADMIN_PASSWORD`.
+
+> Scanning a real (especially Bundesschule) network requires written
+> authorization from the school leadership and DSB before first use.
