@@ -1,0 +1,9 @@
+# Sim-net ground truth — the labelled expectation Argus is measured against.
+# Used for: (a) the device-classification confusion matrix, (b) checking that
+# the prioritised finding set surfaces the guaranteed real vuln, and (c) the
+# FF1 precision control (the out-of-catalog holdout must yield ZERO findings).
+# Columns: host,ip,expected_device_type,expected_cve,applies,notes
+host,ip,expected_device_type,expected_cve,applies,notes
+metasploitable,172.30.0.10,server,CVE-2011-2523,yes,vsftpd 2.3.4 backdoor on tcp/21 — guaranteed version-confirmed Critical (the headline real vuln)
+dvwa,172.30.0.20,web-server,,maybe,vulnerable PHP/Apache/MySQL web app; any catalog hit is version-dependent and must be verified against the running image
+holdout-caddy,172.30.0.30,web-server,,no,OUT-OF-CATALOG control — modern Caddy has no catalog CVE; Argus MUST report zero findings here (FF1 precision / anti-circularity)

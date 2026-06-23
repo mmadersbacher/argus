@@ -1,0 +1,51 @@
+# Argus sim-net — a deliberately-vulnerable lab to exercise discovery + CVE
+# correlation and to back the FF1/FF2 evaluation.
+#
+# ⚠️ AUTHORIZED TEST USE ONLY. Run on an isolated host. NEVER bridge this to a
+# real, production or school network — these containers are intentionally
+# insecure. All images were verified to exist on Docker Hub (2026-06-23).
+#
+#   docker compose -f deploy/simnet/docker-compose.yml up -d
+#   # then scan the lab subnet from the host:
+#   ./target/debug/argus-discovery 172.30.0.0/24
+#   # or point the School Edition appliance at 172.30.0.0/24
+services:
+  metasploitable:
+    image: tleemcjr/metasploitable2
+    # GUARANTEED catalog hit: runs vsftpd 2.3.4 (CVE-2011-2523, Critical 9.8,
+    # version-confirmed) plus many legacy services. This is the headline "real,
+    # demonstrable, version-confirmed Critical" for thesis goal #2.
+    # NOTE: if the container exits immediately, give it a keep-alive command
+    # (image-specific); verify with `docker compose ... ps`.
+    networks:
+      simnet:
+        ipv4_address: 172.30.0.10
+    restart: unless-stopped
+
+  dvwa:
+    image: vulnerables/web-dvwa
+    # Vulnerable PHP/Apache/MySQL web app — additional web attack surface.
+    # Catalog hits here are version-dependent (not asserted as guaranteed).
+    networks:
+      simnet:
+        ipv4_address: 172.30.0.20
+    restart: unless-stopped
+
+  holdout-caddy:
+    image: caddy:2
+    # OUT-OF-CATALOG holdout: a clean, modern web server with NO catalog CVE.
+    # Argus MUST produce ZERO findings for this host. This is the FF1 precision
+    # control that breaks the "catalog tested against itself" circularity — the
+    # single most important fix for the thesis evaluation (see spec §9).
+    networks:
+      simnet:
+        ipv4_address: 172.30.0.30
+    restart: unless-stopped
+
+networks:
+  simnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
