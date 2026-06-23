@@ -155,6 +155,7 @@ pub fn evaluate(assets: &[PolicyAsset]) -> Vec<Advisory> {
     let mut advisories: Vec<Advisory> = [
         kev_internet(assets),
         mgmt_exposed(assets),
+        mgmt_reachable_internal(assets),
         ics_reachable(assets),
         iot_internet(assets),
         ot_mixed_zone(assets),
@@ -462,6 +463,77 @@ fn flat_network(assets: &[PolicyAsset]) -> Option<Advisory> {
     })
 }
 
+/// Management / remote-access ports reachable from elsewhere on a flat internal
+/// segment. The school-edition counterpart to [`mgmt_exposed`]: a self-hosted
+/// appliance sees a flat LAN where almost nothing is internet-facing, so the
+/// real risk is "any device in the student/user /24 can reach this admin port".
+/// Only fires for assets in a /24 that mixes at least two asset classes (a
+/// single-purpose subnet is assumed intentionally isolated). Reachability is
+/// INFERRED from the /24 — there is no VLAN telemetry — and the advisory says so.
+fn mgmt_reachable_internal(assets: &[PolicyAsset]) -> Option<Advisory> {
+    // Distinct asset classes per /24 (AssetType is not Ord/Hash, so key on its
+    // Debug form). A zone mixing >=2 classes means a compromise of one class can
+    // pivot to the others.
+    let mut classes_per_zone: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for a in assets {
+        if let Some(subnet) = a.subnet() {
+            classes_per_zone
+                .entry(subnet)
+                .or_default()
+                .push(format!("{:?}", a.asset_type));
+        }
+    }
+    let distinct: BTreeMap<String, usize> = classes_per_zone
+        .into_iter()
+        .map(|(k, mut v)| {
+            v.sort();
+            v.dedup();
+            (k, v.len())
+        })
+        .collect();
+
+    let mut affected = Vec::new();
+    let mut worst_is_critical = false;
+    for a in assets.iter().filter(|a| !a.internet_facing()) {
+        let Some(subnet) = a.subnet() else { continue };
+        if distinct.get(&subnet).copied().unwrap_or(0) < 2 {
+            continue; // single-class subnet: assume isolated by design
+        }
+        let crit = a.open_any(EXPOSED_CRITICAL_PORTS);
+        let high = a.open_any(EXPOSED_HIGH_PORTS);
+        if crit.is_empty() && high.is_empty() {
+            continue;
+        }
+        worst_is_critical |= !crit.is_empty();
+        let ports: Vec<String> = crit.iter().chain(&high).map(u16::to_string).collect();
+        affected.push(AffectedAsset {
+            name: a.name.clone(),
+            evidence: format!("reachable in {subnet}: {}", ports.join(", ")),
+        });
+    }
+    (!affected.is_empty()).then(|| Advisory {
+        rule: "mgmt-reachable-internal",
+        level: if worst_is_critical {
+            AdvisoryLevel::High
+        } else {
+            AdvisoryLevel::Medium
+        },
+        title: format!(
+            "{} asset(s) expose management/remote-access ports inside a flat segment",
+            affected.len()
+        ),
+        rationale: "On an unsegmented internal network, any compromised device in the same \
+                    subnet can reach these admin/database/remote-access ports — the standard \
+                    lateral-movement path. Inferred from a shared /24; confirm whether VLAN \
+                    isolation is actually in place."
+            .to_owned(),
+        recommendation: "Restrict these ports to a management VLAN / jump host; default-deny \
+                         east-west traffic between device classes."
+            .to_owned(),
+        affected,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +553,45 @@ mod tests {
     #[test]
     fn empty_inventory_yields_no_advisories() {
         assert!(evaluate(&[]).is_empty());
+    }
+
+    #[test]
+    fn internal_mgmt_port_in_a_mixed_flat_zone_is_flagged() {
+        // DC with RDP + an IoT camera in the same /24 -> reachable internally.
+        let mut dc = asset("dc-1", "10.0.0.10", AssetType::It);
+        dc.open_ports = vec![3389];
+        let cam = asset("cam-1", "10.0.0.50", AssetType::Iot);
+        let advisories = evaluate(&[dc, cam]);
+        let adv = advisories
+            .iter()
+            .find(|a| a.rule == "mgmt-reachable-internal")
+            .expect("advisory");
+        assert_eq!(adv.level, AdvisoryLevel::High); // 3389 is a critical port
+        assert!(adv.affected.iter().any(|x| x.name == "dc-1"));
+    }
+
+    #[test]
+    fn internal_mgmt_port_in_single_class_subnet_is_not_flagged() {
+        // Two IT hosts only, same /24, one with RDP -> assumed isolated by design.
+        let mut dc = asset("dc-1", "10.0.1.10", AssetType::It);
+        dc.open_ports = vec![3389];
+        let srv = asset("srv-1", "10.0.1.11", AssetType::It);
+        assert!(evaluate(&[dc, srv])
+            .iter()
+            .all(|a| a.rule != "mgmt-reachable-internal"));
+    }
+
+    #[test]
+    fn internet_facing_mgmt_is_not_double_counted_as_internal() {
+        let mut web = asset("web-1", "203.0.113.10", AssetType::It);
+        web.exposure = Exposure::InternetFacing;
+        web.open_ports = vec![3389];
+        let cam = asset("cam-1", "203.0.113.50", AssetType::Iot);
+        let advisories = evaluate(&[web, cam]);
+        assert!(advisories.iter().any(|a| a.rule == "mgmt-exposed"));
+        assert!(advisories
+            .iter()
+            .all(|a| a.rule != "mgmt-reachable-internal"));
     }
 
     #[test]
