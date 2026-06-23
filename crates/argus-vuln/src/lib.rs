@@ -108,8 +108,10 @@ impl CveRecord {
 /// number or a year ("Windows Server 2019" → not "2019"), which would
 /// otherwise be compared against catalog version ranges and mis-correlate.
 fn extract_version(product: &str) -> Option<&str> {
+    // Also split on '/', so `vendor/version` banners ("Microsoft-IIS/10.0",
+    // "Apache/2.4.49") yield the version, not just the "Vendor 1.2.3" form.
     product
-        .split_whitespace()
+        .split(|c: char| c.is_whitespace() || c == '/')
         .find(|tok| tok.starts_with(|c: char| c.is_ascii_digit()) && tok.contains('.'))
 }
 
@@ -300,6 +302,27 @@ mod tests {
         assert!(correlate_product("dropbear 2016.74")
             .iter()
             .any(|x| x.cve_id == "CVE-2018-15599"));
+    }
+
+    #[test]
+    fn extract_version_handles_slash_delimited_banner() {
+        assert_eq!(extract_version("Microsoft-IIS/10.0"), Some("10.0"));
+        assert_eq!(extract_version("Apache/2.4.49"), Some("2.4.49"));
+        // Space-delimited and dot-less cases unchanged:
+        assert_eq!(extract_version("OpenSSH 8.9p1"), Some("8.9p1"));
+        assert_eq!(extract_version("Windows Server 2019"), None);
+    }
+
+    #[test]
+    fn iis_cve_matches_slash_banner_in_range() {
+        // CVE-2015-1635 affects IIS 7.5-8.5. A real "Microsoft-IIS/8.0" banner
+        // must correlate; "Microsoft-IIS/10.0" (out of range) must not.
+        assert!(correlate_product("Microsoft-IIS/8.0")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2015-1635"));
+        assert!(!correlate_product("Microsoft-IIS/10.0")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2015-1635"));
     }
 
     #[test]
