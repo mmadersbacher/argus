@@ -63,6 +63,8 @@ pub struct PolicyAsset {
     pub open_ports: Vec<u16>,
     /// Whether the asset carries at least one CISA-KEV-listed CVE.
     pub has_kev: bool,
+    /// Detected operating-system string (from fingerprinting), if any.
+    pub os: Option<String>,
 }
 
 impl PolicyAsset {
@@ -162,6 +164,7 @@ pub fn evaluate(assets: &[PolicyAsset]) -> Vec<Advisory> {
         cleartext_protocols(assets),
         high_value_in_noisy_zone(assets),
         flat_network(assets),
+        eol_os(assets),
     ]
     .into_iter()
     .flatten()
@@ -534,6 +537,60 @@ fn mgmt_reachable_internal(assets: &[PolicyAsset]) -> Option<Advisory> {
     })
 }
 
+/// End-of-support OS markers: lowercase substring -> human label. Matched
+/// case-insensitively against the detected OS string.
+const EOL_OS_MARKERS: &[(&str, &str)] = &[
+    ("windows xp", "Windows XP (EOL 2014)"),
+    ("windows vista", "Windows Vista (EOL 2017)"),
+    ("windows 7", "Windows 7 (EOL 2020)"),
+    ("windows 8", "Windows 8/8.1 (EOL 2023)"),
+    (
+        "windows 10",
+        "Windows 10 (mainstream EOL 2025-10-14; LTSC editions differ)",
+    ),
+    ("windows server 2003", "Windows Server 2003 (EOL 2015)"),
+    ("windows server 2008", "Windows Server 2008/R2 (EOL 2020)"),
+    ("windows server 2012", "Windows Server 2012/R2 (EOL 2023)"),
+];
+
+/// Assets whose detected OS is past vendor end-of-support: no security patches,
+/// so every future vulnerability stays permanently unfixed. Deterministic and
+/// low-false-positive — a standing exposure independent of any single CVE.
+fn eol_os(assets: &[PolicyAsset]) -> Option<Advisory> {
+    let affected: Vec<AffectedAsset> = assets
+        .iter()
+        .filter_map(|a| {
+            let os = a.os.as_deref()?;
+            let lower = os.to_lowercase();
+            let label = EOL_OS_MARKERS
+                .iter()
+                .find(|(marker, _)| lower.contains(*marker))
+                .map(|(_, label)| *label)?;
+            Some(AffectedAsset {
+                name: a.name.clone(),
+                evidence: format!("{os} — {label}"),
+            })
+        })
+        .collect();
+    (!affected.is_empty()).then(|| Advisory {
+        rule: "eol-os",
+        level: AdvisoryLevel::High,
+        title: format!(
+            "{} asset(s) run an end-of-life operating system",
+            affected.len()
+        ),
+        rationale: "End-of-life operating systems no longer receive security updates, so every \
+                    future vulnerability remains permanently unpatched — a standing, growing \
+                    exposure independent of any single CVE."
+            .to_owned(),
+        recommendation: "Upgrade or replace these systems; where a device cannot be upgraded \
+                         (lab/exam image, embedded controller), isolate it on a restricted VLAN \
+                         with tight egress control."
+            .to_owned(),
+        affected,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +604,7 @@ mod tests {
             exposure: Exposure::Internal,
             open_ports: Vec::new(),
             has_kev: false,
+            os: None,
         }
     }
 
@@ -592,6 +650,22 @@ mod tests {
         assert!(advisories
             .iter()
             .all(|a| a.rule != "mgmt-reachable-internal"));
+    }
+
+    #[test]
+    fn eol_operating_systems_are_flagged() {
+        let mut win7 = asset("lab-7", "10.0.2.5", AssetType::It);
+        win7.os = Some("Microsoft Windows 7 Professional".to_owned());
+        let mut win11 = asset("staff-11", "10.0.2.6", AssetType::It);
+        win11.os = Some("Windows 11 Pro".to_owned());
+        let advisories = evaluate(&[win7, win11]);
+        let adv = advisories
+            .iter()
+            .find(|a| a.rule == "eol-os")
+            .expect("advisory");
+        assert_eq!(adv.level, AdvisoryLevel::High);
+        assert_eq!(adv.affected.len(), 1);
+        assert_eq!(adv.affected[0].name, "lab-7");
     }
 
     #[test]
