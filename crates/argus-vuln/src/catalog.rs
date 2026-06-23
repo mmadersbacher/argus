@@ -532,6 +532,9 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2018-15599",
         product: "dropbear",
+        // AtMost is intentional and correct: every Dropbear release up to
+        // 2018.76 is affected (fixed in 2018.77), so there is no safe lower
+        // bound to exclude — unlike branch-scoped CVEs above.
         affected: VersionRange::AtMost("2018.76"),
         cvss: 5.3,
         epss: 0.0271,
@@ -625,7 +628,9 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2019-12815",
         product: "ProFTPD",
-        affected: VersionRange::AtMost("1.3.5b"),
+        // mod_copy is a 1.3.x contrib module (absent in 1.2.x); bound the lower
+        // end so the CPFR/CPTO RCE does not falsely flag pre-1.3 releases.
+        affected: VersionRange::Range("1.3.0", "1.3.5b"),
         cvss: 9.8,
         epss: 0.5761,
         kev: false,

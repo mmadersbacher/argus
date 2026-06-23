@@ -283,6 +283,26 @@ mod tests {
     }
 
     #[test]
+    fn proftpd_mod_copy_does_not_match_pre_1_3() {
+        // mod_copy did not exist before ProFTPD 1.3; AtMost over-matched 1.2.x.
+        assert!(!correlate_product("ProFTPD 1.2.10")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2019-12815"));
+        assert!(correlate_product("ProFTPD 1.3.5a")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2019-12815"));
+    }
+
+    #[test]
+    fn dropbear_user_enum_matches_all_prior_versions() {
+        // AtMost is correct here: every version up to 2018.76 is affected, so a
+        // lower bound would wrongly exclude genuinely-affected old releases.
+        assert!(correlate_product("dropbear 2016.74")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2018-15599"));
+    }
+
+    #[test]
     fn openssh_in_range_matches_regresshion() {
         assert!(correlate_product("OpenSSH 8.9p1")
             .iter()
