@@ -32,6 +32,7 @@ pub mod portscan;
 pub mod rdns;
 pub mod rtsp;
 pub mod sampling;
+pub mod smb;
 pub mod snmp;
 pub mod ssdp;
 pub mod target;
@@ -244,6 +245,7 @@ pub async fn enrich(hosts: &mut Vec<DiscoveredHost>, scope: &[IpAddr]) {
     mqtt_enrich(hosts).await;
     // Enterprise + OT identity (directory, database, industrial controllers).
     ldap_enrich(hosts).await;
+    smb_enrich(hosts).await;
     mssql_enrich(hosts).await;
     modbus_enrich(hosts).await;
     enip_enrich(hosts).await;
@@ -970,6 +972,42 @@ fn apply_ldap_users(host: &mut DiscoveredHost, port: u16, found: &ldap::SubtreeF
         );
     }
     enrich_service_banner(host, port, facet, "ldap: ANONYMOUS");
+}
+
+/// SMB2 NEGOTIATE probe (445): record the dialect and whether the server
+/// requires signing. Signing enabled-but-not-required is the NTLM-relay finding.
+async fn smb_enrich(hosts: &mut [DiscoveredHost]) {
+    use tokio::task::JoinSet;
+    let mut targets: Vec<(usize, IpAddr)> = Vec::new();
+    for (i, h) in hosts.iter().enumerate() {
+        let Some(ip) = h.asset.interfaces.first().and_then(|f| f.ip) else {
+            continue;
+        };
+        if h.open_ports.contains(&445) {
+            targets.push((i, ip));
+        }
+    }
+    let mut set = JoinSet::new();
+    for (idx, ip) in targets {
+        set.spawn(async move { (idx, smb::query(ip, Duration::from_secs(4)).await) });
+    }
+    while let Some(joined) = set.join_next().await {
+        let Ok((idx, Some(info))) = joined else {
+            continue;
+        };
+        apply_smb(&mut hosts[idx], &info);
+    }
+}
+
+/// Fold an SMB2 NEGOTIATE result onto a host as a signing-posture facet.
+fn apply_smb(host: &mut DiscoveredHost, info: &smb::SmbInfo) {
+    let dialect = info.dialect.as_deref().unwrap_or("SMB2");
+    let facet = if info.signing_required {
+        format!("smb: {dialect} — signing required")
+    } else {
+        format!("smb: {dialect} — signing NOT required (NTLM-relay exposed)")
+    };
+    enrich_service_banner(host, 445, facet, "smb:");
 }
 
 /// Ask the SQL Server Browser (UDP 1434) of each host with an open 1433.
