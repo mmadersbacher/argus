@@ -553,24 +553,24 @@ impl IntelCache {
             match self.product_cves(&app.vendor, &app.product).await {
                 Some(cves) => {
                     for hit in matching(&cves, observed.as_deref()) {
-                        if !vulns.iter().any(|v| v.cve_id == hit.vuln.cve_id) {
-                            let mut v = hit.vuln.clone();
-                            // Confirmed when the observed version matched a real
-                            // published range; otherwise precise CPE identity
-                            // without a version check (Medium).
-                            v.match_confidence = match observed.as_deref() {
-                                Some(ver)
-                                    if hit
-                                        .constraints
-                                        .iter()
-                                        .any(|c| !c.unbounded() && c.contains(ver)) =>
-                                {
-                                    Confidence::Confirmed
-                                }
-                                _ => Confidence::Medium,
-                            };
-                            vulns.push(v);
-                        }
+                        let mut v = hit.vuln.clone();
+                        // Confirmed when the observed version matched a real
+                        // published range; otherwise precise CPE identity
+                        // without a version check (Medium).
+                        v.match_confidence = match observed.as_deref() {
+                            Some(ver)
+                                if hit
+                                    .constraints
+                                    .iter()
+                                    .any(|c| !c.unbounded() && c.contains(ver)) =>
+                            {
+                                Confidence::Confirmed
+                            }
+                            _ => Confidence::Medium,
+                        };
+                        // Keep the strongest confidence if the catalog already
+                        // added this CVE at a weaker tier (no first-seen demotion).
+                        crate::merge_strongest(&mut vulns, v);
                     }
                 }
                 None => live = false,

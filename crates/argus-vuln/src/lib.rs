@@ -183,6 +183,22 @@ pub fn correlate_services(services: &[Service]) -> Vec<Vulnerability> {
     out
 }
 
+/// Merge a freshly-derived vulnerability into `vulns`, keyed by CVE id, keeping
+/// the **strongest** match confidence when the CVE is already present. Without
+/// this, a first-seen catalog `Low` would suppress a later NVD `Confirmed` for
+/// the same CVE — silently demoting a score-driving finding below the
+/// confirmed-only scoring threshold (the exact failure the confidence model
+/// exists to prevent).
+pub(crate) fn merge_strongest(vulns: &mut Vec<Vulnerability>, candidate: Vulnerability) {
+    match vulns.iter_mut().find(|v| v.cve_id == candidate.cve_id) {
+        Some(existing) if candidate.match_confidence > existing.match_confidence => {
+            *existing = candidate;
+        }
+        Some(_) => {}
+        None => vulns.push(candidate),
+    }
+}
+
 /// Catalog CVEs whose exploitation strictly requires the legacy SMBv1 dialect.
 ///
 /// When a host is *observed* not to offer SMBv1, these are refuted (an
@@ -257,6 +273,40 @@ fn count_severity<'a>(vulns: impl Iterator<Item = &'a Vulnerability>, severity: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mk_vuln(id: &str, conf: Confidence) -> Vulnerability {
+        Vulnerability {
+            cve_id: id.to_owned(),
+            cvss: Some(Cvss {
+                base_score: 9.0,
+                vector: None,
+            }),
+            epss: Some(Epss {
+                score: 0.5,
+                percentile: None,
+            }),
+            kev: false,
+            severity: Severity::High,
+            match_confidence: conf,
+        }
+    }
+
+    #[test]
+    fn merge_strongest_keeps_higher_confidence_regardless_of_order() {
+        // catalog Low already present, NVD Confirmed arrives -> Confirmed wins.
+        let mut a = vec![mk_vuln("CVE-X", Confidence::Low)];
+        merge_strongest(&mut a, mk_vuln("CVE-X", Confidence::Confirmed));
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].match_confidence, Confidence::Confirmed);
+        // stronger already present, weaker arrives -> unchanged.
+        let mut b = vec![mk_vuln("CVE-X", Confidence::Confirmed)];
+        merge_strongest(&mut b, mk_vuln("CVE-X", Confidence::Low));
+        assert_eq!(b[0].match_confidence, Confidence::Confirmed);
+        // different id -> appended.
+        let mut c = vec![mk_vuln("CVE-X", Confidence::Medium)];
+        merge_strongest(&mut c, mk_vuln("CVE-Y", Confidence::Low));
+        assert_eq!(c.len(), 2);
+    }
 
     #[test]
     fn apache_mod_proxy_cves_do_not_match_pre_2_4_versions() {
