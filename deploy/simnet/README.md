@@ -7,17 +7,22 @@ discovery + CVE correlation and for backing the thesis evaluation (FF1/FF2).
 > vulnerable. Run it on an isolated host. **Never** bridge `172.30.0.0/24` to a
 > real, production or school network.
 
-## What's in it
+## What's in it (verified live with `nmap -sV`, 2026-06-23)
 
-| Host | IP | Role | Why it's here |
+| Host | IP | Real finding (version-confirmed) | Why it's here |
 |---|---|---|---|
-| `metasploitable` | 172.30.0.10 | legacy server | **Guaranteed finding:** runs vsftpd 2.3.4 → `CVE-2011-2523` (Critical 9.8, version-confirmed). Removes the "we never found a real bug" risk. |
-| `dvwa` | 172.30.0.20 | web server | Vulnerable PHP/Apache/MySQL app — extra web surface (catalog hits version-dependent). |
-| `holdout-caddy` | 172.30.0.30 | web server | **Out-of-catalog holdout:** a clean modern server with no catalog CVE. Argus must report **zero** findings — the FF1 precision control that breaks the catalog-tested-against-itself circularity. |
+| `metasploitable` | 172.30.0.10 | **ProFTPD 1.3.1** (tcp/2121) → `CVE-2019-12815` mod_copy (Critical) | Broad legacy surface (Apache 2.2.8, MySQL 5.0, Samba 3, Postfix, Postgres 8.3). Its Apache 2.2.8 is correctly **not** flagged — the catalog is 2.4-branch only. |
+| `dvwa` | 172.30.0.20 | **Apache httpd 2.4.25** → `CVE-2021-40438` **and** `CVE-2023-25690` (Critical) | Vulnerable web app; clean version-confirmed Apache hits. |
+| `holdout-caddy` | 172.30.0.30 | **none (expected)** | Out-of-catalog control: a clean modern server with no catalog CVE. Argus must report **zero** findings — the FF1 precision control that breaks the catalog-tested-against-itself circularity (spec §9). |
 
-All images were verified to exist on Docker Hub on 2026-06-23. Because the lab
-can't be pulled in CI, verify pulls on the host before relying on it:
-`docker compose -f deploy/simnet/docker-compose.yml pull`.
+> Honest note: this `tleemcjr/metasploitable2` **container** runs `proftpd` on
+> tcp/2121, **not** the classic VM's `vsftpd 2.3.4` on tcp/21 — so the guaranteed
+> hit here is the ProFTPD mod_copy CVE, confirmed live. Clean version→CVE
+> correlation needs nmap-normalised product strings (`-sV`), not raw
+> connect-scan banners; run the lab through nmap (or the API's nmap path).
+
+All images were verified to exist on Docker Hub on 2026-06-23. Verify pulls on
+the host before relying on it: `docker compose -f deploy/simnet/docker-compose.yml pull`.
 
 ## Run it
 
@@ -26,29 +31,29 @@ docker compose -f deploy/simnet/docker-compose.yml up -d
 docker compose -f deploy/simnet/docker-compose.yml ps    # confirm all are Up
 ```
 
-If `metasploitable` exits immediately, it needs an image-specific keep-alive
-command — add one under its service and re-up.
-
 ## Scan it with Argus
 
 ```bash
-# CLI (from the repo root, after `cargo build`):
+# Discovery (fast, no CVE correlation in the CLI itself):
 ./target/debug/argus-discovery 172.30.0.0/24
 
-# or point the School Edition appliance's scan at 172.30.0.0/24
-# (the appliance host must be able to route to the docker bridge)
+# Full version→CVE correlation — feed nmap -sV output through the API:
+nmap -sV -oX lab.xml 172.30.0.10 172.30.0.20 172.30.0.30
+#   POST lab.xml to the running API's  /api/import/nmap  (auth required),
+#   then GET /api/vulns to see the correlated, confidence-tagged CVEs.
 ```
 
 ## Expected result (the success criterion)
 
-- `172.30.0.10` → a **version-confirmed Critical** `CVE-2011-2523` (vsftpd 2.3.4).
+- `172.30.0.10` → `CVE-2019-12815` (ProFTPD 1.3.1), version-confirmed Critical.
+- `172.30.0.20` → `CVE-2021-40438` + `CVE-2023-25690` (Apache 2.4.25), confirmed.
 - `172.30.0.30` (Caddy) → **no findings**.
 - `ground-truth.csv` is the labelled expectation: use it for the classifier
   confusion matrix and to confirm the prioritised "fix-these-first" list puts
-  the guaranteed Critical at the top.
+  the Criticals at the top.
 
 ## Next (not yet here)
 
 Per spec §8 the full lab also wants: a Windows/AD box (SMBv1/EOL-OS), a NAS, an
-old Apache/OpenSSH Linux box, an IP-camera/printer mock, and BACnet/Modbus
-emulators — added as those probes/fingerprints land in later cycles.
+old OpenSSH box, an IP-camera/printer mock, and BACnet/Modbus emulators — added
+as those probes/fingerprints land in later cycles.
