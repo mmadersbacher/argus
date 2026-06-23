@@ -257,6 +257,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn apache_mod_proxy_cves_do_not_match_pre_2_4_versions() {
+        // CVE-2021-40438 / CVE-2023-25690 affect the 2.4 branch only. An
+        // unbounded AtMost falsely flagged httpd 1.3/2.0/2.2 as High Critical.
+        let v = correlate_product("Apache httpd 1.3.41");
+        assert!(!v.iter().any(|x| x.cve_id == "CVE-2021-40438"));
+        assert!(!v.iter().any(|x| x.cve_id == "CVE-2023-25690"));
+    }
+
+    #[test]
+    fn apache_mod_proxy_cves_still_match_in_branch_versions() {
+        let v = correlate_product("Apache httpd 2.4.40");
+        assert!(v.iter().any(|x| x.cve_id == "CVE-2021-40438"));
+        assert!(v.iter().any(|x| x.cve_id == "CVE-2023-25690"));
+    }
+
+    #[test]
+    fn jenkins_cli_cve_does_not_match_1x() {
+        assert!(!correlate_product("Jenkins 1.650")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2024-23897"));
+        assert!(correlate_product("Jenkins 2.400")
+            .iter()
+            .any(|x| x.cve_id == "CVE-2024-23897"));
+    }
+
+    #[test]
     fn openssh_in_range_matches_regresshion() {
         assert!(correlate_product("OpenSSH 8.9p1")
             .iter()

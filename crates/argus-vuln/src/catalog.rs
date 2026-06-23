@@ -218,7 +218,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2024-23897",
         product: "Jenkins",
-        affected: VersionRange::AtMost("2.441"),
+        // Jenkins 2.x weekly line (fixed 2.442); bounded so it cannot match 1.x.
+        affected: VersionRange::Range("2.0", "2.441"),
         cvss: 9.8,
         epss: 0.85,
         kev: true,
@@ -436,7 +437,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2023-25690",
         product: "Apache httpd",
-        affected: VersionRange::AtMost("2.4.55"),
+        // 2.4 branch only (fixed 2.4.56); bounded so it cannot match 1.3/2.0/2.2.
+        affected: VersionRange::Range("2.4.0", "2.4.55"),
         cvss: 9.8,
         epss: 0.8377,
         kev: false,
@@ -446,7 +448,8 @@ pub const CATALOG: &[CveRecord] = &[
     CveRecord {
         cve_id: "CVE-2021-40438",
         product: "Apache httpd",
-        affected: VersionRange::AtMost("2.4.48"),
+        // 2.4 branch only (fixed 2.4.49); bounded against ancient-version FP.
+        affected: VersionRange::Range("2.4.0", "2.4.48"),
         cvss: 9.0,
         epss: 1.0,
         kev: true,
