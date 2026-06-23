@@ -76,4 +76,9 @@ cargo clippy         # lint
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+**PolyForm Strict 1.0.0** — source-available. The source is published for review
+and transparency. PolyForm Strict permits **noncommercial, personal and
+educational/institutional use** and forbids commercial use, distribution and
+derivative works; all commercial rights are reserved by the author. See
+[`LICENSE`](LICENSE). The General (multi-tenant SaaS) edition's prior history
+remains under its Apache-2.0 release tag.
