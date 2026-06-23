@@ -917,6 +917,19 @@ async fn ldap_enrich(hosts: &mut [DiscoveredHost]) {
             continue;
         };
         apply_ldap(&mut hosts[idx], port, &dse);
+        // rootDSE is always readable (not a finding). If it advertises a base
+        // DN, test whether the directory CONTENTS are readable without a bind —
+        // that is the actual misconfiguration, and it unlocks AS-REP-roastable
+        // detection (userAccountControl & DONT_REQ_PREAUTH).
+        if let Some(base) = dse.default_naming_context.clone() {
+            if let Some(ip) = hosts[idx].asset.interfaces.first().and_then(|f| f.ip) {
+                if let Some(found) =
+                    ldap::query_users(ip, port, &base, Duration::from_secs(4)).await
+                {
+                    apply_ldap_users(&mut hosts[idx], port, &found);
+                }
+            }
+        }
     }
 }
 
@@ -941,6 +954,22 @@ fn apply_ldap(host: &mut DiscoveredHost, port: u16, dse: &ldap::LdapRootDse) {
         let _ = write!(facet, " host={h}");
     }
     enrich_service_banner(host, port, facet, "ldap:");
+}
+
+/// Surface an anonymous-directory-read finding plus any AS-REP-roastable users.
+fn apply_ldap_users(host: &mut DiscoveredHost, port: u16, found: &ldap::SubtreeFindings) {
+    let mut facet = format!(
+        "ldap: ANONYMOUS directory read — {} user(s) enumerable unauthenticated",
+        found.users.len()
+    );
+    if !found.asrep_roastable.is_empty() {
+        let _ = write!(
+            facet,
+            "; AS-REP-roastable: {}",
+            found.asrep_roastable.join(", ")
+        );
+    }
+    enrich_service_banner(host, port, facet, "ldap: ANONYMOUS");
 }
 
 /// Ask the SQL Server Browser (UDP 1434) of each host with an open 1433.

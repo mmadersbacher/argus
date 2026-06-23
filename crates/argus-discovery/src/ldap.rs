@@ -302,6 +302,154 @@ fn assign_field(out: &mut LdapRootDse, name: &str, value: String) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Anonymous subtree enumeration (the actual misconfiguration finding)
+// ---------------------------------------------------------------------------
+
+/// `userAccountControl` flag `DONT_REQ_PREAUTH`: a user that can be
+/// AS-REP-roasted (a hash requestable with no credential at all).
+const UAC_DONT_REQ_PREAUTH: u32 = 0x0040_0000;
+
+/// What an anonymous `(objectClass=user)` wholeSubtree search returned.
+///
+/// A populated `users` list means the directory hands its contents to an
+/// UNAUTHENTICATED client — the reportable misconfiguration (distinct from the
+/// always-readable rootDSE). Empty is the hardened, expected state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubtreeFindings {
+    /// A capped sample of `sAMAccountName`s read without any bind.
+    pub users: Vec<String>,
+    /// `sAMAccountName`s whose `userAccountControl` has `DONT_REQ_PREAUTH`:
+    /// AS-REP-roastable with no credential.
+    pub asrep_roastable: Vec<String>,
+}
+
+/// Build an anonymous `(objectClass=user)` wholeSubtree `searchRequest` under
+/// `base_dn`, requesting only `sAMAccountName` + `userAccountControl`,
+/// `sizeLimit` 5. messageID 2 (the rootDSE probe used 1).
+#[must_use]
+fn build_subtree_search(base_dn: &str) -> Vec<u8> {
+    let mut req = Vec::new();
+    req.extend(tlv(0x04, base_dn.as_bytes())); // baseObject = domain root DN
+    req.extend_from_slice(&[0x0A, 0x01, 0x02]); // scope = wholeSubtree (2)
+    req.extend_from_slice(&[0x0A, 0x01, 0x00]); // derefAliases = never
+    req.extend_from_slice(&[0x02, 0x01, 0x05]); // sizeLimit = 5
+    req.extend_from_slice(&[0x02, 0x01, 0x0A]); // timeLimit = 10
+    req.extend_from_slice(&[0x01, 0x01, 0x00]); // typesOnly = false
+                                                // filter: equalityMatch [3] { attributeDesc "objectClass", value "user" }.
+    let mut eq = tlv(0x04, b"objectClass");
+    eq.extend(tlv(0x04, b"user"));
+    req.extend(tlv(0xA3, &eq));
+    // attributes: SEQUENCE OF OCTET STRING.
+    let mut attrs = tlv(0x04, b"sAMAccountName");
+    attrs.extend(tlv(0x04, b"userAccountControl"));
+    req.extend(tlv(0x30, &attrs));
+
+    let search = tlv(0x63, &req); // searchRequest [APPLICATION 3]
+    let mut msg = vec![0x02, 0x01, 0x02]; // messageID = 2
+    msg.extend(search);
+    tlv(0x30, &msg)
+}
+
+/// Parse a subtree response: collect `sAMAccountName`s from each
+/// `searchResEntry`, flag the AS-REP-roastable ones.
+#[must_use]
+fn parse_subtree(resp: &[u8]) -> SubtreeFindings {
+    let mut out = SubtreeFindings::default();
+    let mut pos = 0usize;
+    while let Some((tag, body, end)) = read_tlv(resp, pos) {
+        if tag != 0x30 {
+            break;
+        }
+        if let Some((_, _, after_id)) = read_tlv(resp, body) {
+            if let Some((op_tag, op_body, op_end)) = read_tlv(resp, after_id) {
+                if op_tag == 0x64 {
+                    if let Some((sam, uac)) = parse_user_entry(resp, op_body, op_end) {
+                        if uac.is_some_and(|u| u & UAC_DONT_REQ_PREAUTH != 0) {
+                            out.asrep_roastable.push(sam.clone());
+                        }
+                        if out.users.len() < 50 {
+                            out.users.push(sam);
+                        }
+                    }
+                }
+            }
+        }
+        pos = end;
+    }
+    out
+}
+
+/// Pull `(sAMAccountName, userAccountControl)` from one `searchResEntry` body.
+fn parse_user_entry(resp: &[u8], body: usize, end: usize) -> Option<(String, Option<u32>)> {
+    let (_, _, after_name) = read_tlv(resp, body)?; // objectName (the user DN)
+    let (attrs_tag, attrs_body, attrs_end) = read_tlv(resp, after_name)?;
+    if attrs_tag != 0x30 || attrs_end > end {
+        return None;
+    }
+    let mut sam: Option<String> = None;
+    let mut uac: Option<u32> = None;
+    let mut pos = attrs_body;
+    while pos < attrs_end {
+        let Some((_, pair_body, pair_end)) = read_tlv(resp, pos) else {
+            break;
+        };
+        if let Some((0x04, type_body, type_end)) = read_tlv(resp, pair_body) {
+            let name = String::from_utf8_lossy(resp.get(type_body..type_end).unwrap_or_default());
+            if let Some((0x31, set_body, _)) = read_tlv(resp, type_end) {
+                if let Some((_, v_body, v_end)) = read_tlv(resp, set_body) {
+                    if let Some(val) = tlv_string(resp, v_body, v_end) {
+                        if name.eq_ignore_ascii_case("sAMAccountName") {
+                            sam = Some(val);
+                        } else if name.eq_ignore_ascii_case("userAccountControl") {
+                            uac = val.trim().parse::<u32>().ok();
+                        }
+                    }
+                }
+            }
+        }
+        pos = pair_end;
+    }
+    sam.map(|s| (s, uac))
+}
+
+/// Anonymously enumerate users under `base_dn` (the AD domain root DN).
+///
+/// Returns `Some` only if the server handed back directory objects WITHOUT a
+/// bind — the misconfiguration. `None` if it answered with no entries
+/// (hardened) or did not answer LDAP. Read-only: one searchRequest, no bind.
+pub async fn query_users(
+    ip: IpAddr,
+    port: u16,
+    base_dn: &str,
+    wait: Duration,
+) -> Option<SubtreeFindings> {
+    let addr = SocketAddr::new(ip, port);
+    let mut stream = timeout(wait, TcpStream::connect(addr)).await.ok()?.ok()?;
+    timeout(wait, stream.write_all(&build_subtree_search(base_dn)))
+        .await
+        .ok()?
+        .ok()?;
+    let mut buf = Vec::new();
+    let mut chunk = vec![0u8; 4096];
+    loop {
+        let Ok(Ok(n)) = timeout(wait, stream.read(&mut chunk)).await else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(chunk.get(..n).unwrap_or_default());
+        if buf.len() >= RESPONSE_READ {
+            buf.truncate(RESPONSE_READ);
+            break;
+        }
+    }
+    drop(stream);
+    let findings = parse_subtree(&buf);
+    (!findings.users.is_empty()).then_some(findings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,5 +597,58 @@ mod tests {
         assert_eq!(ber_len(255), vec![0x81, 0xFF]);
         assert_eq!(ber_len(256), vec![0x82, 0x01, 0x00]);
         assert_eq!(ber_len(0x1234), vec![0x82, 0x12, 0x34]);
+    }
+
+    /// Build one user `searchResEntry` (objectName DN + sAMAccountName + UAC).
+    fn user_entry(dn: &str, sam: &str, uac: &str) -> Vec<u8> {
+        let mut entry = tlv(0x04, dn.as_bytes()); // objectName = user DN
+        let mut attr_seq = attr("sAMAccountName", sam);
+        attr_seq.extend(attr("userAccountControl", uac));
+        entry.extend(tlv(0x30, &attr_seq));
+        let app4 = tlv(0x64, &entry);
+        let mut msg = vec![0x02, 0x01, 0x02]; // messageID 2
+        msg.extend(app4);
+        tlv(0x30, &msg)
+    }
+
+    #[test]
+    fn subtree_search_is_well_formed() {
+        let r = build_subtree_search("DC=corp,DC=example,DC=com");
+        assert_eq!(r[0], 0x30, "top SEQUENCE");
+        assert!(r.windows(3).any(|w| w == [0x02, 0x01, 0x02]), "messageID 2");
+        assert!(
+            r.windows(3).any(|w| w == [0x0A, 0x01, 0x02]),
+            "scope wholeSubtree (2)"
+        );
+        assert!(r.windows(3).any(|w| w == [0x02, 0x01, 0x05]), "sizeLimit 5");
+        assert!(r.contains(&0xA3), "equalityMatch filter [3]");
+        assert!(
+            r.windows(14).any(|w| w == b"sAMAccountName"),
+            "sAMAccountName requested"
+        );
+    }
+
+    #[test]
+    fn subtree_parses_users_and_flags_asrep_roastable() {
+        // alice = normal (UAC 512); svc-asrep has DONT_REQ_PREAUTH
+        // (512 | 0x400000 = 4194816).
+        let mut resp = user_entry("CN=alice,DC=corp", "alice", "512");
+        resp.extend(user_entry("CN=svc,DC=corp", "svc-asrep", "4194816"));
+        let f = parse_subtree(&resp);
+        assert_eq!(f.users, vec!["alice".to_owned(), "svc-asrep".to_owned()]);
+        assert_eq!(f.asrep_roastable, vec!["svc-asrep".to_owned()]);
+    }
+
+    #[test]
+    fn subtree_with_no_entries_is_empty() {
+        // A bare searchResDone (resultCode 50 = insufficientAccessRights):
+        // the hardened directory hands back nothing.
+        let done_body = [0x0A, 0x01, 0x32, 0x04, 0x00, 0x04, 0x00];
+        let done = tlv(0x65, &done_body);
+        let mut msg = vec![0x02, 0x01, 0x02];
+        msg.extend(done);
+        let resp = tlv(0x30, &msg);
+        assert!(parse_subtree(&resp).users.is_empty());
+        assert!(parse_subtree(&resp).asrep_roastable.is_empty());
     }
 }
