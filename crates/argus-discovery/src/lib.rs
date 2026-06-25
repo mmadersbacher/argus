@@ -581,18 +581,34 @@ async fn http_enrich(hosts: &mut [DiscoveredHost]) {
     let mut set = JoinSet::new();
     for (idx, ip, port, is_tls) in targets {
         set.spawn(async move {
-            (
-                idx,
-                port,
-                http::fingerprint(ip, port, is_tls, Duration::from_secs(4)).await,
-            )
+            let info = http::fingerprint(ip, port, is_tls, Duration::from_secs(4)).await;
+            // Only probe the camera vendor endpoints when the root page is NOT a
+            // known CMS — a Moodle/WordPress server has a generator and is not a
+            // camera, so it is spared the two extra read-only GETs.
+            let camera = match &info {
+                Some(i) if i.generator.is_none() => {
+                    http::camera_fingerprint(ip, port, is_tls, Duration::from_secs(4)).await
+                }
+                _ => None,
+            };
+            (idx, port, info, camera)
         });
     }
     while let Some(joined) = set.join_next().await {
-        let Ok((idx, port, Some(info))) = joined else {
+        let Ok((idx, port, info, camera)) = joined else {
             continue;
         };
-        apply_http(&mut hosts[idx], port, &info);
+        if let Some(info) = info {
+            apply_http(&mut hosts[idx], port, &info);
+        }
+        if let Some(product) = camera {
+            add_web_app_service(
+                &mut hosts[idx],
+                port,
+                &product,
+                "ip-camera (vendor info endpoint)",
+            );
+        }
     }
 }
 
@@ -626,14 +642,15 @@ fn apply_http(host: &mut DiscoveredHost, port: u16, info: &http::HttpInfo) {
     // confirmed product from the HTTP server itself — surface it as its own
     // service so vuln correlation matches it with ITS version, not the server's.
     if let Some(generator) = &info.generator {
-        add_web_app_service(host, port, generator);
+        add_web_app_service(host, port, generator, "web-app (meta generator)");
     }
 }
 
-/// Add the CMS / web-app product (from the `<meta generator>`) as its own
-/// service on `port`, so it correlates independently of the HTTP server.
-/// Idempotent: the same app product is never added twice.
-fn add_web_app_service(host: &mut DiscoveredHost, port: u16, product: &str) {
+/// Add a web-layer product (a CMS from `<meta generator>`, or a camera vendor
+/// from its info endpoint) as its own service on `port`, so it correlates
+/// independently of the HTTP server with ITS own version. Idempotent: the same
+/// product is never added twice; `note` is the banner annotation.
+fn add_web_app_service(host: &mut DiscoveredHost, port: u16, product: &str, note: &str) {
     if host
         .services
         .iter()
@@ -645,7 +662,7 @@ fn add_web_app_service(host: &mut DiscoveredHost, port: u16, product: &str) {
         port,
         protocol: Protocol::Tcp,
         product: Some(product.to_owned()),
-        banner: Some("web-app (meta generator)".to_owned()),
+        banner: Some(note.to_owned()),
         cpe: None,
     });
 }

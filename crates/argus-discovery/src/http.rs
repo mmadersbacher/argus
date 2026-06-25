@@ -156,6 +156,97 @@ fn meta_content(tag: &str, tag_lower: &str) -> Option<String> {
     }
 }
 
+/// Probe a web port for a known IP-camera vendor's info endpoint and return a
+/// correlatable product string (`Hikvision <model> <fw>` / `Dahua <type>`).
+///
+/// Two **read-only** GETs to documented info endpoints. On the cameras that
+/// matter these answer unauthenticated (the very weakness behind their KEV
+/// CVEs); a patched camera answers `401`/`404` and yields nothing, so there is
+/// no false positive. Returns `None` for anything that is not a recognised
+/// camera. Redirects are not followed (an info endpoint that 30x's is not it).
+pub async fn camera_fingerprint(
+    ip: IpAddr,
+    port: u16,
+    tls: bool,
+    wait: Duration,
+) -> Option<String> {
+    let scheme = if tls { "https" } else { "http" };
+    let client = reqwest::Client::builder()
+        .timeout(wait)
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("argus-discovery")
+        .build()
+        .ok()?;
+
+    // Hikvision ISAPI deviceInfo (XML).
+    let hik = format!("{scheme}://{ip}:{port}/ISAPI/System/deviceInfo");
+    if let Ok(resp) = client.get(&hik).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.text().await {
+                if let Some(p) = parse_hikvision(slice_to_chars(&body, MAX_BODY)) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // Dahua magicBox getSystemInfo (key=value text).
+    let dahua = format!("{scheme}://{ip}:{port}/cgi-bin/magicBox.cgi?action=getSystemInfo");
+    if let Ok(resp) = client.get(&dahua).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.text().await {
+                if let Some(p) = parse_dahua(slice_to_chars(&body, MAX_BODY)) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Parse a Hikvision ISAPI `deviceInfo` XML into `Hikvision <model> <firmware>`.
+/// Requires the `DeviceInfo` root + a `model` tag so a random `200` at that path
+/// is not mistaken for a camera.
+fn parse_hikvision(xml: &str) -> Option<String> {
+    if !xml.contains("DeviceInfo") {
+        return None;
+    }
+    let model = xml_tag(xml, "model")?;
+    Some(xml_tag(xml, "firmwareVersion").map_or_else(
+        || format!("Hikvision {model}"),
+        |fw| format!("Hikvision {model} {fw}"),
+    ))
+}
+
+/// Parse a Dahua magicBox `getSystemInfo` body into `Dahua <deviceType>`.
+fn parse_dahua(body: &str) -> Option<String> {
+    let dtype = kv_value(body, "deviceType")?;
+    Some(format!("Dahua {dtype}"))
+}
+
+/// Extract `<tag>value</tag>` (first occurrence), trimmed; `None` if absent or
+/// empty.
+fn xml_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    let value = xml[start..end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Read a `key=value` line's value (the Dahua config-dump format), trimmed.
+fn kv_value(body: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    body.lines()
+        .filter_map(|l| l.trim().strip_prefix(&prefix))
+        .map(str::trim)
+        .find(|v| !v.is_empty())
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +308,30 @@ mod tests {
             extract_generator(r#"<meta name="generator" content="">"#),
             None
         );
+    }
+
+    #[test]
+    fn hikvision_deviceinfo_xml_yields_vendor_model_firmware() {
+        let xml = r#"<?xml version="1.0"?><DeviceInfo version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema"><deviceName>IPCAMERA</deviceName><model>DS-2CD2042WD-I</model><firmwareVersion>V5.4.5</firmwareVersion></DeviceInfo>"#;
+        assert_eq!(
+            parse_hikvision(xml).as_deref(),
+            Some("Hikvision DS-2CD2042WD-I V5.4.5")
+        );
+        // Model without firmware still identifies the vendor.
+        assert_eq!(
+            parse_hikvision("<DeviceInfo><model>DS-7608</model></DeviceInfo>").as_deref(),
+            Some("Hikvision DS-7608")
+        );
+        // A 200 that is not the DeviceInfo XML is not a camera.
+        assert_eq!(parse_hikvision("<html><model>x</model></html>"), None);
+        assert_eq!(parse_hikvision("<DeviceInfo></DeviceInfo>"), None);
+    }
+
+    #[test]
+    fn dahua_systeminfo_kv_yields_vendor_devicetype() {
+        let body = "Appliance=IPC\r\ndeviceType=IPC-HFW4431R-Z\r\nhardwareVersion=1.00\r\n";
+        assert_eq!(parse_dahua(body).as_deref(), Some("Dahua IPC-HFW4431R-Z"));
+        assert_eq!(parse_dahua("serialNumber=123\nfoo=bar\n"), None);
     }
 
     #[test]
