@@ -1,0 +1,16 @@
+# FF3 before/after risk-reduction scenario — a small, representative school net.
+# One row per (asset, finding). exposure/criticality are per asset (first row).
+# Columns: asset,exposure,criticality,cvss,epss,kev,severity,confirmed
+# A remediation "action" patches an asset's confirmed KEV / critical findings;
+# FF3 measures how much aggregate risk that removes and how the prioritised plan
+# concentrates the reduction into the first few actions.
+asset,exposure,criticality,cvss,epss,kev,severity,confirmed
+dc-01,internal,critical,9.8,0.90,yes,critical,yes
+dc-01,internal,critical,8.1,0.62,yes,high,yes
+cam-lobby,internal,low,9.8,0.94,yes,critical,yes
+moodle,internet_facing,high,9.8,0.06,no,critical,yes
+moodle,internet_facing,high,7.5,0.40,no,high,yes
+fileserver,internal,high,7.5,0.20,no,high,yes
+printer-staff,internal,low,5.3,0.01,no,medium,yes
+ws-lab-01,internal,low,4.0,0.05,no,medium,yes
+ws-lab-02,internal,low,2.0,0.01,no,low,yes
