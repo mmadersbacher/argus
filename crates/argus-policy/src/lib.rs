@@ -11,10 +11,10 @@
 //! uses — which is deliberately crude but works without switch/VLAN
 //! telemetry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
-use argus_core::{AssetType, Criticality, Exposure};
+use argus_core::{AssetType, Criticality, DeviceRole, Exposure};
 use serde::Serialize;
 
 /// Management / database / remote-access ports that must not face the
@@ -65,6 +65,9 @@ pub struct PolicyAsset {
     pub has_kev: bool,
     /// Detected operating-system string (from fingerprinting), if any.
     pub os: Option<String>,
+    /// Typed device role (Domain Controller, hypervisor, …), used for Tier-0
+    /// escalation. `Unknown` when the fingerprint did not resolve a role.
+    pub device_role: DeviceRole,
 }
 
 impl PolicyAsset {
@@ -157,6 +160,7 @@ pub fn evaluate(assets: &[PolicyAsset]) -> Vec<Advisory> {
     let mut advisories: Vec<Advisory> = [
         kev_internet(assets),
         mgmt_exposed(assets),
+        tier0_crown_jewel(assets),
         mgmt_reachable_internal(assets),
         ics_reachable(assets),
         iot_internet(assets),
@@ -466,6 +470,76 @@ fn flat_network(assets: &[PolicyAsset]) -> Option<Advisory> {
     })
 }
 
+/// Short label for a Tier-0 role in advisory evidence.
+fn tier0_label(role: DeviceRole) -> &'static str {
+    match role {
+        DeviceRole::DomainController => "domain controller",
+        DeviceRole::Hypervisor => "hypervisor",
+        _ => "Tier-0 asset",
+    }
+}
+
+/// Tier-0 "crown jewel" assets (Domain Controller, hypervisor) reachable inside
+/// a flat segment. A compromise of a DC or hypervisor is domain-/fleet-wide, so
+/// the exposed management port that reads as [`mgmt_reachable_internal`] (High)
+/// on an ordinary host is **Critical** here. Same flat-zone inference: only
+/// fires inside a /24 that mixes ≥2 asset classes (a single-class subnet is
+/// assumed isolated by design).
+fn tier0_crown_jewel(assets: &[PolicyAsset]) -> Option<Advisory> {
+    let mut classes_per_zone: BTreeMap<String, BTreeSet<AssetType>> = BTreeMap::new();
+    for a in assets {
+        if let Some(subnet) = a.subnet() {
+            classes_per_zone
+                .entry(subnet)
+                .or_default()
+                .insert(a.asset_type);
+        }
+    }
+    let affected: Vec<AffectedAsset> = assets
+        .iter()
+        .filter(|a| a.device_role.is_tier0() && !a.internet_facing())
+        .filter_map(|a| {
+            let subnet = a.subnet()?;
+            if classes_per_zone.get(&subnet).map_or(0, BTreeSet::len) < 2 {
+                return None; // single-class subnet: assumed isolated by design
+            }
+            let mut ports = a.open_any(EXPOSED_CRITICAL_PORTS);
+            ports.extend(a.open_any(EXPOSED_HIGH_PORTS));
+            (!ports.is_empty()).then(|| AffectedAsset {
+                name: a.name.clone(),
+                evidence: format!(
+                    "{} reachable in {subnet}: {}",
+                    tier0_label(a.device_role),
+                    ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })
+        })
+        .collect();
+    (!affected.is_empty()).then(|| Advisory {
+        rule: "tier0-crown-jewel",
+        level: AdvisoryLevel::Critical,
+        title: format!(
+            "{} Tier-0 asset(s) (domain controller / hypervisor) reachable inside a flat segment",
+            affected.len()
+        ),
+        rationale: "A Domain Controller or hypervisor is a Tier-0 crown jewel: compromising it \
+                    is domain- or fleet-wide, not a single host. Exposing its management / \
+                    remote-access ports to a shared internal segment is the highest-value \
+                    lateral-movement target on the network — the same exposure that is merely \
+                    notable on a workstation."
+            .to_owned(),
+        recommendation: "Restrict these ports to a dedicated management VLAN / jump host and \
+                         default-deny east-west traffic to Tier-0 systems; never place a DC or \
+                         hypervisor in a flat user/student segment."
+            .to_owned(),
+        affected,
+    })
+}
+
 /// Management / remote-access ports reachable from elsewhere on a flat internal
 /// segment. The school-edition counterpart to [`mgmt_exposed`]: a self-hosted
 /// appliance sees a flat LAN where almost nothing is internet-facing, so the
@@ -604,7 +678,44 @@ mod tests {
             open_ports: Vec::new(),
             has_kev: false,
             os: None,
+            device_role: DeviceRole::Unknown,
         }
+    }
+
+    #[test]
+    fn tier0_dc_in_a_mixed_flat_zone_is_critical() {
+        // A Domain Controller with RDP sharing a /24 with an IoT camera: Tier-0
+        // crown jewel reachable in a flat segment → Critical (not the generic
+        // mgmt-reachable-internal High).
+        let mut dc = asset("dc-1", "10.0.0.10", AssetType::It);
+        dc.device_role = DeviceRole::DomainController;
+        dc.open_ports = vec![3389];
+        let cam = asset("cam-1", "10.0.0.50", AssetType::Iot);
+        let advisories = evaluate(&[dc, cam]);
+        let adv = advisories
+            .iter()
+            .find(|a| a.rule == "tier0-crown-jewel")
+            .expect("tier0 advisory");
+        assert_eq!(adv.level, AdvisoryLevel::Critical);
+        assert!(adv.affected.iter().any(|x| x.name == "dc-1"));
+        assert!(adv.affected[0].evidence.contains("domain controller"));
+
+        // The same exposure on an ordinary workstation does NOT escalate.
+        let mut ws = asset("ws-1", "10.0.1.10", AssetType::It);
+        ws.open_ports = vec![3389];
+        let other = asset("cam-2", "10.0.1.50", AssetType::Iot);
+        assert!(evaluate(&[ws, other])
+            .iter()
+            .all(|a| a.rule != "tier0-crown-jewel"));
+
+        // A DC alone in its own /24 (single class) is assumed isolated → no fire.
+        let mut lone_dc = asset("dc-2", "10.0.2.10", AssetType::It);
+        lone_dc.device_role = DeviceRole::DomainController;
+        lone_dc.open_ports = vec![3389];
+        let peer = asset("srv-1", "10.0.2.11", AssetType::It);
+        assert!(evaluate(&[lone_dc, peer])
+            .iter()
+            .all(|a| a.rule != "tier0-crown-jewel"));
     }
 
     #[test]

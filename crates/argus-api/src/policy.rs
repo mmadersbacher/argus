@@ -32,6 +32,7 @@ pub async fn get_policy(
             open_ports: a.services.iter().map(|s| s.port).collect(),
             has_kev: a.vulnerabilities.iter().any(|v| v.kev),
             os: a.asset.fingerprint.os.clone(),
+            device_role: a.asset.fingerprint.role(),
         })
         .collect();
     Ok(Json(argus_policy::evaluate(&facts)))
