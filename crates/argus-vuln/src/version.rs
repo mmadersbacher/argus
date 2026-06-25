@@ -26,7 +26,16 @@ fn segments(version: &str) -> Vec<(u64, &str)> {
                 .find(|c: char| !c.is_ascii_digit())
                 .unwrap_or(segment.len());
             let (digits, suffix) = segment.split_at(split);
-            (digits.parse::<u64>().unwrap_or(0), suffix)
+            // Empty digits (a text-leading segment) is numeric 0; a real but
+            // overflowing run saturates to MAX — matching `runs()` below, so an
+            // absurdly long version sorts high consistently instead of
+            // collapsing to 0 (smallest) on one code path and MAX on the other.
+            let value = if digits.is_empty() {
+                0
+            } else {
+                digits.parse::<u64>().unwrap_or(u64::MAX)
+            };
+            (value, suffix)
         })
         .collect()
 }
@@ -143,5 +152,17 @@ mod tests {
     fn equal_versions_compare_equal() {
         assert_eq!(cmp("1.2.3", "1.2.3"), Equal);
         assert_eq!(cmp("10.0", "10.0"), Equal);
+    }
+
+    #[test]
+    fn overflowing_numeric_segment_saturates_high_consistently() {
+        let huge = "99999999999999999999999999"; // > u64::MAX
+                                                 // A leading numeric segment that overflows sorts ABOVE a normal release
+                                                 // (saturates to MAX), not below it as a silent 0.
+        assert_eq!(cmp(huge, "9.0"), Greater);
+        // The same saturation in a suffix run, so both code paths agree.
+        assert_eq!(cmp(&format!("1.0p{huge}"), "1.0p2"), Greater);
+        // A text-leading segment is still numeric 0 (empty-digits, unchanged).
+        assert_eq!(cmp("a", "1"), Less);
     }
 }

@@ -18,6 +18,19 @@ use argus_core::{
 };
 
 /// Which versions of a product a CVE affects.
+///
+/// **Endpoint conventions** — mind these when transcribing an NVD range, since
+/// the upper-bound variants disagree on inclusivity:
+/// - [`LessThan`](Self::LessThan): exclusive `v < hi` — `hi` is NVD's
+///   `versionEndExcluding` (the *first-fixed* version).
+/// - [`AtMost`](Self::AtMost): inclusive `v <= hi` — `hi` is the *last-affected*
+///   version, no lower bound.
+/// - [`Range`](Self::Range): **inclusive both ends** `lo <= v <= hi` — `hi` is
+///   the *last-affected* version, **not** NVD's `versionEndExcluding`. Copying a
+///   `versionEndExcluding` straight into `hi` over-matches by one release.
+/// - [`Branches`](Self::Branches): each interval half-open `[start, fixed)` —
+///   `fixed` *is* NVD's `versionEndExcluding` (first-fixed).
+/// - [`Exact`](Self::Exact): `v == x`.
 #[derive(Debug, Clone, Copy)]
 pub enum VersionRange {
     /// All versions (protocol-level CVE, or discovery has no version).
@@ -192,7 +205,27 @@ pub fn correlate_services(services: &[Service]) -> Vec<Vulnerability> {
 pub(crate) fn merge_strongest(vulns: &mut Vec<Vulnerability>, candidate: Vulnerability) {
     match vulns.iter_mut().find(|v| v.cve_id == candidate.cve_id) {
         Some(existing) if candidate.match_confidence > existing.match_confidence => {
-            *existing = candidate;
+            // Adopt the higher-confidence match, but never lose curated signals
+            // it lacks: an NVD record can arrive `Confirmed` yet carry no
+            // CVSS/EPSS and `kev=false` (unscored / awaiting analysis). A
+            // wholesale replace would then erase the catalog's curated CVSS/KEV
+            // — silently downgrading a flagship KEV Critical on first scan, with
+            // no CVSS overlay to restore it. `take()` moves the values out (we
+            // overwrite `existing` next, so no clone is needed).
+            let mut merged = candidate;
+            if merged.cvss.is_none() {
+                merged.cvss = existing.cvss.take();
+            }
+            if merged.epss.is_none() {
+                merged.epss = existing.epss.take();
+            }
+            if !merged.kev {
+                merged.kev = existing.kev;
+            }
+            if merged.severity == Severity::None {
+                merged.severity = existing.severity;
+            }
+            *existing = merged;
         }
         Some(_) => {}
         None => vulns.push(candidate),
@@ -306,6 +339,74 @@ mod tests {
         let mut c = vec![mk_vuln("CVE-X", Confidence::Medium)];
         merge_strongest(&mut c, mk_vuln("CVE-Y", Confidence::Low));
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn merge_strongest_carries_forward_signals_the_candidate_lacks() {
+        // Curated catalog entry (kev + cvss + severity) already present; a
+        // higher-confidence NVD match arrives bare (no cvss/epss, kev=false).
+        // Confidence upgrades, but the curated signals must survive — otherwise
+        // a flagship KEV Critical silently loses its score-driving cvss/kev.
+        let curated = Vulnerability {
+            cve_id: "CVE-2024-6387".into(),
+            cvss: Some(Cvss {
+                base_score: 8.1,
+                vector: None,
+            }),
+            epss: Some(Epss {
+                score: 0.4,
+                percentile: None,
+            }),
+            kev: true,
+            severity: Severity::High,
+            match_confidence: Confidence::High,
+        };
+        let bare_nvd = Vulnerability {
+            cve_id: "CVE-2024-6387".into(),
+            cvss: None,
+            epss: None,
+            kev: false,
+            severity: Severity::None,
+            match_confidence: Confidence::Confirmed,
+        };
+        let mut v = vec![curated];
+        merge_strongest(&mut v, bare_nvd);
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0].match_confidence,
+            Confidence::Confirmed,
+            "confidence upgraded"
+        );
+        assert_eq!(
+            v[0].cvss.as_ref().map(|c| c.base_score),
+            Some(8.1),
+            "curated CVSS preserved"
+        );
+        assert!(v[0].kev, "curated KEV preserved");
+        assert_eq!(v[0].severity, Severity::High, "curated severity preserved");
+        assert!(v[0].epss.is_some(), "curated EPSS preserved");
+    }
+
+    #[test]
+    fn version_range_endpoint_conventions_are_pinned() {
+        // Range is inclusive-inclusive: both bounds in, one past `hi` out.
+        let r = VersionRange::Range("2.4.0", "2.4.55");
+        assert!(r.contains("2.4.0"));
+        assert!(r.contains("2.4.55"));
+        assert!(!r.contains("2.4.56"));
+        assert!(!r.contains("2.3.99"));
+        // AtMost: inclusive upper bound.
+        let a = VersionRange::AtMost("2018.76");
+        assert!(a.contains("2018.76"));
+        assert!(!a.contains("2018.77"));
+        // LessThan: exclusive upper bound.
+        let l = VersionRange::LessThan("9.3");
+        assert!(!l.contains("9.3"));
+        assert!(l.contains("9.2"));
+        // Exact: only itself.
+        let e = VersionRange::Exact("1.2.3");
+        assert!(e.contains("1.2.3"));
+        assert!(!e.contains("1.2.4"));
     }
 
     #[test]
