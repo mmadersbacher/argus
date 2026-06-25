@@ -618,7 +618,36 @@ fn apply_http(host: &mut DiscoveredHost, port: u16, info: &http::HttpInfo) {
     if let Some(title) = &info.title {
         let _ = write!(facet, " title={title}");
     }
+    if let Some(generator) = &info.generator {
+        let _ = write!(facet, " generator={generator}");
+    }
     enrich_service_banner(host, port, facet, "http:");
+    // The CMS a page advertises (e.g. "Moodle 4.1") is a distinct, version-
+    // confirmed product from the HTTP server itself — surface it as its own
+    // service so vuln correlation matches it with ITS version, not the server's.
+    if let Some(generator) = &info.generator {
+        add_web_app_service(host, port, generator);
+    }
+}
+
+/// Add the CMS / web-app product (from the `<meta generator>`) as its own
+/// service on `port`, so it correlates independently of the HTTP server.
+/// Idempotent: the same app product is never added twice.
+fn add_web_app_service(host: &mut DiscoveredHost, port: u16, product: &str) {
+    if host
+        .services
+        .iter()
+        .any(|s| s.product.as_deref() == Some(product))
+    {
+        return;
+    }
+    host.services.push(Service {
+        port,
+        protocol: Protocol::Tcp,
+        product: Some(product.to_owned()),
+        banner: Some("web-app (meta generator)".to_owned()),
+        cpe: None,
+    });
 }
 
 /// Append a banner `facet` to the service on `port` (creating a bare service if
@@ -1514,6 +1543,43 @@ mod tests {
         let report = scan(&[], &ScanOptions::default()).await;
         assert_eq!(report.hosts_scanned, 0);
         assert!(report.live.is_empty());
+    }
+
+    #[test]
+    fn http_generator_becomes_a_correlatable_web_app_service() {
+        let mut hosts = Vec::new();
+        let idx = upsert_host(&mut hosts, "10.0.0.10".parse().unwrap());
+        let info = http::HttpInfo {
+            status: 200,
+            server: Some("Apache".to_owned()),
+            generator: Some("Moodle 4.1".to_owned()),
+            ..Default::default()
+        };
+        apply_http(&mut hosts[idx], 80, &info);
+        // The CMS is surfaced as a service product (so vuln correlation fires)…
+        assert!(
+            hosts[idx]
+                .services
+                .iter()
+                .any(|s| s.port == 80 && s.product.as_deref() == Some("Moodle 4.1")),
+            "expected a Moodle web-app service: {:?}",
+            hosts[idx].services
+        );
+        // …and the generator is also recorded in the HTTP banner facet.
+        assert!(hosts[idx].services.iter().any(|s| s
+            .banner
+            .as_deref()
+            .is_some_and(|b| b.contains("generator=Moodle 4.1"))));
+        // Idempotent: a second pass does not duplicate the app service.
+        apply_http(&mut hosts[idx], 80, &info);
+        assert_eq!(
+            hosts[idx]
+                .services
+                .iter()
+                .filter(|s| s.product.as_deref() == Some("Moodle 4.1"))
+                .count(),
+            1
+        );
     }
 
     #[test]

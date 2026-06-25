@@ -28,6 +28,10 @@ pub struct HttpInfo {
     pub powered_by: Option<String>,
     /// First `<title>` text, whitespace-collapsed.
     pub title: Option<String>,
+    /// `<meta name="generator">` content — the CMS product + version a web app
+    /// advertises (e.g. `WordPress 6.4.2`, `Moodle 4.1`, `Drupal 9`). The single
+    /// strongest version-confirmed signal for self-hosted school web apps.
+    pub generator: Option<String>,
 }
 
 /// Fingerprint `ip:port`.
@@ -56,13 +60,16 @@ pub async fn fingerprint(ip: IpAddr, port: u16, tls: bool, wait: Duration) -> Op
     // Cap the body before scanning for a title; an unbounded read of a hostile
     // page is the one way this probe could hurt the scanner.
     let body = resp.text().await.ok()?;
-    let title = extract_title(slice_to_chars(&body, MAX_BODY));
+    let capped = slice_to_chars(&body, MAX_BODY);
+    let title = extract_title(capped);
+    let generator = extract_generator(capped);
 
     Some(HttpInfo {
         status,
         server,
         powered_by,
         title,
+        generator,
     })
 }
 
@@ -100,6 +107,55 @@ fn extract_title(html: &str) -> Option<String> {
     (!collapsed.is_empty()).then_some(collapsed)
 }
 
+/// Extract the `content` of the first `<meta name="generator" content="...">`
+/// tag — a CMS advertising its product + version. Attribute order is free and
+/// quotes may be single, double or absent. The value is trimmed and length-
+/// capped so a hostile page cannot smuggle a huge string into correlation.
+fn extract_generator(html: &str) -> Option<String> {
+    // ASCII-lowercase preserves byte offsets, so positions found in `lower`
+    // index `html` (the original case) exactly — essential for the value.
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("<meta") {
+        let start = from + rel;
+        let end = lower[start..].find('>').map_or(html.len(), |e| start + e);
+        let tag_lower = &lower[start..end];
+        from = end.max(start + 5); // always make progress
+        if !(tag_lower.contains("name=\"generator\"")
+            || tag_lower.contains("name='generator'")
+            || tag_lower.contains("name=generator"))
+        {
+            continue;
+        }
+        if let Some(content) = meta_content(&html[start..end], tag_lower) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                // A generator is "Product 1.2.3", not an essay; the version
+                // token survives a generous char cap.
+                return Some(trimmed.chars().take(120).collect());
+            }
+        }
+    }
+    None
+}
+
+/// Read the `content` attribute value out of one `<meta>` tag, handling double,
+/// single or no quotes. `tag` is the original-case slice; `tag_lower` is its
+/// ASCII-lowercase twin (same byte offsets), so the key is located
+/// case-insensitively while the value is returned verbatim.
+fn meta_content(tag: &str, tag_lower: &str) -> Option<String> {
+    let key = tag_lower.find("content")?;
+    let after = key + tag_lower[key..].find('=')? + 1;
+    let rest = tag[after..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let close = rest[1..].find(quote)?;
+        Some(rest[1..=close].to_owned())
+    } else {
+        Some(rest.split_whitespace().next()?.to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +177,45 @@ mod tests {
         assert_eq!(
             extract_title("<TiTlE>RouterOS</tItLe>").as_deref(),
             Some("RouterOS")
+        );
+    }
+
+    #[test]
+    fn generator_extracts_cms_product_and_version() {
+        // WordPress / Moodle advertise product + version in the generator meta.
+        assert_eq!(
+            extract_generator(r#"<meta name="generator" content="WordPress 6.4.2" />"#).as_deref(),
+            Some("WordPress 6.4.2")
+        );
+        assert_eq!(
+            extract_generator(r#"<head><meta name="generator" content="Moodle 4.1"></head>"#)
+                .as_deref(),
+            Some("Moodle 4.1")
+        );
+        // Attribute order is free; single quotes are accepted.
+        assert_eq!(
+            extract_generator(r"<meta content='Drupal 9 (https://drupal.org)' name='generator'>")
+                .as_deref(),
+            Some("Drupal 9 (https://drupal.org)")
+        );
+        // Case-insensitive tag/attribute names.
+        assert_eq!(
+            extract_generator(r#"<META NAME="generator" CONTENT="Joomla! 4.2">"#).as_deref(),
+            Some("Joomla! 4.2")
+        );
+    }
+
+    #[test]
+    fn generator_absent_or_other_meta_yields_none() {
+        assert_eq!(extract_generator("<meta charset=\"utf-8\">"), None);
+        assert_eq!(
+            extract_generator("<html><body>no meta here</body></html>"),
+            None
+        );
+        // A name=generator with an empty content is not a usable signal.
+        assert_eq!(
+            extract_generator(r#"<meta name="generator" content="">"#),
+            None
         );
     }
 
