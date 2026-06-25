@@ -1,7 +1,10 @@
 # Argus School Edition — single-tenant, self-hosted appliance.
 # Internal LAN scanning ON; no self-service signup; no demo data.
+# One origin: a Caddy reverse proxy fronts the console + API so the appliance is
+# usable from any workstation on the LAN (not only from localhost).
 # Run from repo root:
 #   docker compose -f deploy/school/docker-compose.yml --env-file deploy/school/.env.school up -d
+# Then open  http://<appliance-host>:${ARGUS_HTTP_PORT:-8080}/
 services:
   postgres:
     image: postgres:18
@@ -26,19 +29,27 @@ services:
       ARGUS_BIND: 0.0.0.0:8088
       RUST_LOG: info
       ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?set a 32+ char secret}
-      ARGUS_CORS_ORIGIN: ${ARGUS_CORS_ORIGIN:-http://localhost:3000}
       ARGUS_ADMIN_EMAIL: ${ARGUS_ADMIN_EMAIL:?set the school admin email}
       ARGUS_ADMIN_PASSWORD: ${ARGUS_ADMIN_PASSWORD:?set the school admin password}
       # Appliance profile: single tenant, no demo, internal scanning ON.
       ARGUS_SIGNUP_ENABLED: "false"
       ARGUS_SEED_DEMO: "false"
       ARGUS_SCAN_ALLOW_PRIVATE: "true"
+      # Single-origin behind the proxy → same-site cookies over plain HTTP.
+      # (Secure cookies require HTTPS; the proxy serves plain HTTP on the LAN.
+      # Add TLS in the Caddyfile and flip these to true/None for an HTTPS host.)
+      ARGUS_COOKIE_SECURE: "false"
+      ARGUS_COOKIE_SAMESITE: "Lax"
+      # Console and API share an origin, so this is only a fallback for any
+      # non-proxied cross-origin call; same-origin requests ignore it.
+      ARGUS_CORS_ORIGIN: ${ARGUS_CORS_ORIGIN:-http://localhost:${ARGUS_HTTP_PORT:-8080}}
       NVD_API_KEY: ${NVD_API_KEY:-}
       ARGUS_INTEL_CACHE: /var/lib/argus/intel-cache.json
     volumes:
       - argus-intel:/var/lib/argus
-    ports:
-      - "8088:8088"
+    # No host port: the API is reached only through the proxy.
+    expose:
+      - "8088"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,12 +58,30 @@ services:
     build:
       context: ../../web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8088
-    ports:
-      - "3000:3000"
+        # Empty → the browser calls the API at a relative path on the same
+        # origin (served by the proxy), so nothing is baked to "localhost".
+        NEXT_PUBLIC_API_URL: ""
+    # No host port: the console is reached only through the proxy.
+    expose:
+      - "3000"
     depends_on:
       - api
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${ARGUS_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - web
 
 volumes:
   argus-pgdata:
   argus-intel:
+  caddy-data:
+  caddy-config:

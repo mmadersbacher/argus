@@ -145,14 +145,30 @@ The School Edition runs the same image as a self-hosted, single-tenant appliance
 inside the school LAN. Data never leaves the appliance.
 
     cp deploy/school/.env.school.example deploy/school/.env.school
-    # edit deploy/school/.env.school (secrets, admin, CORS origin)
+    # edit deploy/school/.env.school (secrets, admin, host port)
     docker compose -f deploy/school/docker-compose.yml --env-file deploy/school/.env.school up -d
+
+Then open `http://<appliance-host>:8080/` (the `ARGUS_HTTP_PORT`) from **any**
+workstation on the LAN.
+
+A **Caddy reverse proxy** fronts the console and API on **one origin**: the
+admin does not sit at the appliance, so a headless box must be reachable by its
+LAN address — not `localhost`. Single-origin is what makes that work:
+
+- the browser calls the API at a **relative path** (`NEXT_PUBLIC_API_URL=""`),
+  so nothing is baked to `localhost` and it always hits the host it loaded from;
+- console and API are same-origin, so the session cookie is sent with
+  `SameSite=Lax` over **plain HTTP** (no `Secure`/HTTPS requirement) and there is
+  no CORS preflight — hence the profile sets `ARGUS_COOKIE_SECURE=false` and
+  `ARGUS_COOKIE_SAMESITE=Lax`. To run HTTPS, add `tls` in `deploy/school/Caddyfile`
+  and flip those to `true`/`None`.
 
 Profile differences vs. the SaaS compose: self-service signup is OFF
 (`ARGUS_SIGNUP_ENABLED=false`), demo seeding is OFF (`ARGUS_SEED_DEMO=false`),
 and internal LAN scanning is ON (`ARGUS_SCAN_ALLOW_PRIVATE=true`) — required so
 the appliance can inventory the school's own RFC1918 network. The first-run
-admin is created from `ARGUS_ADMIN_EMAIL`/`ARGUS_ADMIN_PASSWORD`.
+admin is created from `ARGUS_ADMIN_EMAIL`/`ARGUS_ADMIN_PASSWORD`. Only the proxy
+port is published; the API and console are reached through it, not directly.
 
 > Scanning a real (especially Bundesschule) network requires written
 > authorization from the school leadership and DSB before first use.

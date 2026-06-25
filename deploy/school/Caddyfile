@@ -1,0 +1,25 @@
+# Argus School Edition — single-origin reverse proxy.
+#
+# The appliance is a headless box on the school LAN; the admin reaches it from
+# their own workstation at http://<appliance-host>:<port>/. Serving the console
+# and the API from ONE origin is what makes that work:
+#   * the browser calls the API at a RELATIVE path (NEXT_PUBLIC_API_URL=""), so
+#     nothing is baked to "localhost" — it always hits the host it loaded from;
+#   * console and API are same-origin, so the session cookie is sent with
+#     SameSite=Lax over plain HTTP (no Secure/HTTPS requirement) and there is no
+#     CORS preflight to satisfy.
+#
+# TLS: this listens on plain HTTP for a simple LAN appliance. To terminate TLS,
+# change `:80` to your hostname and let Caddy auto-provision, or add `tls`.
+:80 {
+	# API + health go to the axum backend; everything else to the Next console.
+	handle /api/* {
+		reverse_proxy api:8088
+	}
+	handle /health {
+		reverse_proxy api:8088
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}
