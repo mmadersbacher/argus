@@ -866,4 +866,39 @@ pub const CATALOG: &[CveRecord] = &[
         severity: Severity::Critical,
         summary: "Veeam Backup & Replication unauthenticated deserialization RCE",
     },
+    // ---- School-prevalent self-hosted EDU-web / VoIP ----------------------
+    // (added 2026-06-25; ranges/CVSS from NVD CPE configs, EPSS from FIRST.org)
+    CveRecord {
+        cve_id: "CVE-2022-35649",
+        product: "Moodle",
+        // NVD per-branch: [3.9.0,3.9.15) ∪ [3.11.0,3.11.8) ∪ [4.0.0,4.0.2).
+        // (3.10 was EOL/unsupported and is not listed by NVD; not flagged.)
+        affected: VersionRange::Branches(&[
+            ("3.9.0", "3.9.15"),
+            ("3.11.0", "3.11.8"),
+            ("4.0.0", "4.0.2"),
+        ]),
+        cvss: 9.8,
+        epss: 0.0632,
+        kev: false,
+        severity: Severity::Critical,
+        summary: "Moodle RCE via GhostScript PostScript parsing (sites with GhostScript < 9.50)",
+    },
+    CveRecord {
+        cve_id: "CVE-2024-42365",
+        product: "Asterisk",
+        // NVD regular-Asterisk branches: <18.24.2 ∪ [19.0.0,20.9.2) ∪
+        // [21.0.0,21.4.2). certified-asterisk has its own -certN fix points and
+        // is not separately modelled (rare outside paid-support deployments).
+        affected: VersionRange::Branches(&[
+            ("0", "18.24.2"),
+            ("19.0.0", "20.9.2"),
+            ("21.0.0", "21.4.2"),
+        ]),
+        cvss: 8.8,
+        epss: 0.047,
+        kev: false,
+        severity: Severity::High,
+        summary: "Asterisk AMI write=originate arbitrary file write via curl/MixMonitor (RCE)",
+    },
 ];

@@ -441,6 +441,35 @@ mod tests {
     }
 
     #[test]
+    fn school_edu_and_voip_cves_match_per_branch() {
+        // Moodle: affected per-branch; the first-fixed release and the
+        // unlisted (EOL 3.10) branch are not flagged.
+        assert!(correlate_product("Moodle 3.11.5")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2022-35649"));
+        assert!(correlate_product("Moodle 3.11.8")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2022-35649"));
+        assert!(correlate_product("Moodle 3.10.9")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2022-35649"));
+
+        // Asterisk: regular branches; fixed and above-fix releases excluded.
+        assert!(correlate_product("Asterisk 18.20.0")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2024-42365"));
+        assert!(correlate_product("Asterisk 20.5.0")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2024-42365"));
+        assert!(correlate_product("Asterisk 18.24.2")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2024-42365"));
+        assert!(correlate_product("Asterisk 21.5.0")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2024-42365"));
+    }
+
+    #[test]
     fn apache_mod_proxy_cves_do_not_match_pre_2_4_versions() {
         // CVE-2021-40438 / CVE-2023-25690 affect the 2.4 branch only. An
         // unbounded AtMost falsely flagged httpd 1.3/2.0/2.2 as High Critical.
