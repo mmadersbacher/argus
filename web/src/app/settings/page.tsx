@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  auditLog,
   createApiKey,
   createUser,
   deleteApiKey,
@@ -18,6 +19,7 @@ import {
   saveMonitor,
   saveWebhook,
   type ApiKeySummary,
+  type AuditEntry,
   type MonitorConfig,
   type Role,
   type UserSummary,
@@ -465,6 +467,68 @@ function WebhookPanel() {
   );
 }
 
+/** The admin-action audit trail (compliance / DSGVO): who did what, when.
+ *  Read-only, fetched once on mount; only rendered for admins. */
+function AuditPanel() {
+  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    auditLog(200)
+      .then((e) => {
+        if (active) setEntries(e);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : "failed to load");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return (
+    <Panel
+      title="Audit trail"
+      description="Recent privileged actions — who did what, when. Stays on the appliance."
+      bodyClassName="p-0"
+    >
+      {error ? (
+        <p className="px-4 py-3 text-sm text-muted">
+          Could not load the audit trail: {error}
+        </p>
+      ) : entries === null ? (
+        <p className="px-4 py-3 text-sm text-muted">Loading…</p>
+      ) : entries.length === 0 ? (
+        <p className="px-4 py-3 text-sm text-muted">No recorded actions yet.</p>
+      ) : (
+        <div className="max-h-80 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-line bg-surface-2/60 text-left text-xs text-muted">
+                <th className="px-4 py-3 font-medium">Action</th>
+                <th className="px-4 py-3 font-medium">Who</th>
+                <th className="px-4 py-3 font-medium">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e, i) => (
+                <tr key={`${e.at}-${i}`} className="border-t border-line">
+                  <td className="px-4 py-2 font-mono text-xs text-fg-2">
+                    {e.action}
+                  </td>
+                  <td className="px-4 py-2 text-fg-2">
+                    {e.actor ?? <span className="text-muted">system</span>}
+                  </td>
+                  <td className="px-4 py-2 text-muted">{timeAgo(e.at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function Page() {
   const { session } = useAuth();
   const isAdmin = session?.role === "admin";
@@ -640,6 +704,8 @@ export default function Page() {
             )}
 
             <WebhookPanel />
+
+            <AuditPanel />
 
             <Panel
               title="Users"

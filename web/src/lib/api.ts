@@ -253,6 +253,20 @@ export const createApiKey = (name: string, role: Role) =>
 export const deleteApiKey = (id: string) =>
   fetchJSON<void>(`/api/api-keys/${id}`, { method: "DELETE" });
 
+/** One audit-trail entry: who did what, when (the compliance trail). */
+export interface AuditEntry {
+  action: string;
+  /** Acting user's email, or null (system action / removed user). */
+  actor: string | null;
+  detail: unknown;
+  /** rfc3339 timestamp. */
+  at: string;
+}
+
+/** The tenant's admin-action audit trail, newest first (admin-only). */
+export const auditLog = (limit?: number) =>
+  fetchJSON<AuditEntry[]>(`/api/audit${limit ? `?limit=${limit}` : ""}`);
+
 export type { Role, Session };
 
 // ---- inventory ------------------------------------------------------------

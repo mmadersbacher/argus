@@ -597,6 +597,55 @@ pub async fn list_events(
         .collect())
 }
 
+/// One audit-trail entry: who did what, when. The compliance trail a school
+/// (DSGVO) wants to be able to read back.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEntry {
+    /// What happened (`login`, `api_key.created`, `webhook.updated`, `scan`, …).
+    pub action: String,
+    /// Email of the acting user; `null` for a system action or a user that has
+    /// since been removed (the audit row is kept, the actor nulled).
+    pub actor: Option<String>,
+    /// Action-specific detail.
+    pub detail: serde_json::Value,
+    /// When it happened.
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+/// List a tenant's most recent audit-log entries, newest first, with the acting
+/// user's email resolved (null when the user was removed).
+pub async fn list_audit(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    limit: i64,
+) -> Result<Vec<AuditEntry>, sqlx::Error> {
+    let rows: Vec<(
+        String,
+        Option<String>,
+        Option<serde_json::Value>,
+        OffsetDateTime,
+    )> = sqlx::query_as(
+        "SELECT a.action, u.email, a.detail, a.created_at
+             FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+             WHERE a.tenant_id = $1
+             ORDER BY a.created_at DESC, a.id DESC LIMIT $2",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(action, actor, detail, at)| AuditEntry {
+            action,
+            actor,
+            detail: detail.unwrap_or(serde_json::Value::Null),
+            at,
+        })
+        .collect())
+}
+
 /// Fetch a tenant's monitor configuration, if one was ever saved.
 pub async fn get_monitor(
     pool: &PgPool,

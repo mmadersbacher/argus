@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 mod account;
+mod audit;
 mod auth;
 mod cookies;
 mod db;
@@ -270,6 +271,7 @@ fn router(state: AppState) -> Router {
         .route("/api/findings", post(findings::set_finding))
         .route("/api/findings/bulk", post(findings::set_findings_bulk))
         .route("/api/report", get(report::get_report))
+        .route("/api/audit", get(audit::get_audit))
         .route("/api/policy", get(policy::get_policy))
         .route("/api/events", get(monitor::list_events))
         .route(

@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
-use crate::db::{self, ApiKeyRow, DueMonitor, EventRow, MonitorRow, UserRow};
+use crate::db::{self, ApiKeyRow, AuditEntry, DueMonitor, EventRow, MonitorRow, UserRow};
 use crate::seed::ScoredAsset;
 
 /// Memory-store retention cap: newest events kept per tenant. The in-memory
@@ -319,6 +319,7 @@ impl Store {
                 user_id,
                 action: action.to_owned(),
                 detail,
+                at: OffsetDateTime::now_utc(),
             }),
         }
     }
@@ -582,6 +583,39 @@ impl Store {
                         asset_name: e.asset_name.clone(),
                         detail: e.detail.clone(),
                         created_at: e.created_at,
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    /// List a tenant's most recent audit-trail entries, newest first, with the
+    /// acting user's email resolved (null when the actor is a system action or a
+    /// user that has since been removed).
+    pub async fn list_audit(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<AuditEntry>, StoreError> {
+        match self {
+            Self::Postgres(pool) => Ok(db::list_audit(pool, tenant_id, limit).await?),
+            Self::Memory(m) => {
+                let mem = m.lock();
+                let take = usize::try_from(limit).unwrap_or(0);
+                Ok(mem
+                    .audit
+                    .iter()
+                    .rev() // insertion order is oldest-first
+                    .filter(|a| a.tenant_id == tenant_id)
+                    .take(take)
+                    .map(|a| AuditEntry {
+                        action: a.action.clone(),
+                        actor: a
+                            .user_id
+                            .and_then(|uid| mem.users.values().find(|u| u.id == uid))
+                            .map(|u| u.email.clone()),
+                        detail: a.detail.clone(),
+                        at: a.at,
                     })
                     .collect())
             }
@@ -882,14 +916,11 @@ struct MemApiKey {
 }
 
 struct MemAudit {
-    #[allow(dead_code)]
     tenant_id: Uuid,
-    #[allow(dead_code)]
     user_id: Option<Uuid>,
-    #[allow(dead_code)]
     action: String,
-    #[allow(dead_code)]
     detail: serde_json::Value,
+    at: OffsetDateTime,
 }
 
 struct MemEvent {
@@ -1127,6 +1158,55 @@ mod tests {
         assert!(store.claim_due_monitors().await.unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn audit_trail_reads_back_newest_first_with_actor_resolved() {
+        let store = Store::memory();
+        let tenant = Uuid::new_v4();
+        let admin = admin(tenant, "admin@school.local");
+        let admin_id = admin.id;
+        store
+            .register_tenant(tenant, "Org", "org", &admin)
+            .await
+            .unwrap();
+        store
+            .audit(
+                tenant,
+                Some(admin_id),
+                "api_key.created",
+                serde_json::json!({ "name": "ci" }),
+            )
+            .await;
+        store
+            .audit(tenant, None, "scan", serde_json::json!({}))
+            .await;
+
+        let trail = store.list_audit(tenant, 50).await.unwrap();
+        assert_eq!(trail.len(), 2);
+        // Newest first; the system scan was written last and has no actor.
+        assert_eq!(trail[0].action, "scan");
+        assert_eq!(trail[0].actor, None);
+        // The user action resolves the acting email.
+        assert_eq!(trail[1].action, "api_key.created");
+        assert_eq!(trail[1].actor.as_deref(), Some("admin@school.local"));
+        // Tenant-scoped, and the limit is honoured.
+        assert!(store
+            .list_audit(Uuid::new_v4(), 50)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.list_audit(tenant, 1).await.unwrap().len(), 1);
+
+        // Wire-contract tripwire: the console (api.ts AuditEntry) reads these
+        // field names — a rename fails here, not silently in the browser.
+        let json = serde_json::to_value(&trail[1]).expect("serialize");
+        for key in ["action", "actor", "detail", "at"] {
+            assert!(
+                json.get(key).is_some(),
+                "AuditEntry lost wire field `{key}`"
+            );
+        }
+    }
+
     // ---- Postgres integration (gated on TEST_DATABASE_URL) ------------------
     //
     // These exercise the `db.rs` path the in-memory backend cannot: the
@@ -1180,6 +1260,41 @@ mod tests {
         for pair in loaded.windows(2) {
             assert!(pair[0].risk.value >= pair[1].risk.value);
         }
+    }
+
+    #[tokio::test]
+    async fn pg_audit_trail_reads_back_with_actor_join() {
+        let Some(store) = pg_store().await else {
+            return;
+        };
+        let tenant = Uuid::new_v4();
+        let suffix = tenant.simple();
+        let admin = admin(tenant, &format!("audit-{suffix}@test.local"));
+        let admin_id = admin.id;
+        store
+            .register_tenant(tenant, "Org", &format!("audit-{suffix}"), &admin)
+            .await
+            .unwrap();
+        store
+            .audit(
+                tenant,
+                Some(admin_id),
+                "login",
+                serde_json::json!({ "ip": "127.0.0.1" }),
+            )
+            .await;
+        store
+            .audit(tenant, None, "scan", serde_json::json!({}))
+            .await;
+
+        let trail = store.list_audit(tenant, 50).await.unwrap();
+        assert_eq!(trail.len(), 2);
+        // Newest first (system scan written last, no actor).
+        assert_eq!(trail[0].action, "scan");
+        assert_eq!(trail[0].actor, None);
+        // The LEFT JOIN resolved the acting user's email.
+        assert_eq!(trail[1].action, "login");
+        assert_eq!(trail[1].actor.as_deref(), Some(admin.email.as_str()));
     }
 
     #[tokio::test]
