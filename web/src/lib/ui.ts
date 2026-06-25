@@ -2,7 +2,7 @@
 // Class strings are written as literals so the Tailwind v4 scanner picks them up.
 
 import type { IconName } from "@/components/icon";
-import type { AssetType, Confidence, Exposure, RiskBand } from "./api";
+import type { AssetType, Confidence, DeviceRole, Exposure, RiskBand } from "./api";
 
 export interface BandStyle {
   label: string;
@@ -30,6 +30,27 @@ export const assetTypeLabel: Record<AssetType, string> = {
   network: "Network",
   cloud: "Cloud",
   mobile: "Mobile",
+  unknown: "Unknown",
+};
+
+/** Human label per typed device role (mirrors argus_core::DeviceRole). The
+ *  Record is exhaustive, so a new Rust variant is a TS build error here. */
+export const deviceRoleLabel: Record<DeviceRole, string> = {
+  domain_controller: "Domain Controller",
+  hypervisor: "Hypervisor",
+  server: "Server",
+  nas: "NAS",
+  printer: "Printer",
+  camera: "IP Camera",
+  nvr: "NVR",
+  network_device: "Network Device",
+  industrial_controller: "Industrial Controller",
+  voip_phone: "VoIP Phone",
+  medical_device: "Medical Device",
+  media_device: "Media Device",
+  workstation: "Workstation",
+  mobile: "Mobile",
+  iot: "IoT Device",
   unknown: "Unknown",
 };
 

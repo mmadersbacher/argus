@@ -11,6 +11,7 @@ import { useReport } from "@/lib/use-report";
 import {
   assetTypeLabel,
   bandStyles,
+  deviceRoleLabel,
   exposureLabel,
   formatCvss,
   formatEpss,
@@ -439,6 +440,26 @@ export function ReportsView() {
                 </p>
               </div>
             </div>
+            {inv.by_role && inv.by_role.length > 0 ? (
+              <div className="mt-6 border-t border-line pt-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  By device role
+                </p>
+                <ul className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                  {inv.by_role.map((r) => (
+                    <li
+                      key={r.role}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <span className="text-fg-2">
+                        {deviceRoleLabel[r.role] ?? r.role}
+                      </span>
+                      <span className="tabular-nums text-fg">{r.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </Panel>
         </div>
 

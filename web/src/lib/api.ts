@@ -13,6 +13,24 @@ export type AssetType =
   | "cloud"
   | "mobile"
   | "unknown";
+/** Typed device role, mirrors argus_core::DeviceRole (serde snake_case). */
+export type DeviceRole =
+  | "domain_controller"
+  | "hypervisor"
+  | "server"
+  | "nas"
+  | "printer"
+  | "camera"
+  | "nvr"
+  | "network_device"
+  | "industrial_controller"
+  | "voip_phone"
+  | "medical_device"
+  | "media_device"
+  | "workstation"
+  | "mobile"
+  | "iot"
+  | "unknown";
 export type Criticality = "low" | "medium" | "high" | "critical";
 export type Exposure = "internal" | "internet_facing" | "unknown";
 /** Match / observation confidence, ordered low < medium < high < confirmed. */
@@ -509,6 +527,11 @@ export interface TypeCount {
   count: number;
 }
 
+export interface RoleCount {
+  role: DeviceRole;
+  count: number;
+}
+
 export interface CriticalityCount {
   criticality: Criticality;
   count: number;
@@ -525,6 +548,7 @@ export interface ReportInventory {
   new_in_period: number;
   stale: number;
   by_type: TypeCount[];
+  by_role: RoleCount[];
   by_criticality: CriticalityCount[];
 }
 
