@@ -108,6 +108,18 @@ pub struct Fingerprint {
     pub evidence: Vec<String>,
 }
 
+impl Fingerprint {
+    /// The typed [`DeviceRole`](crate::DeviceRole) resolved from the free-form
+    /// `device_type` (`Unknown` when unset or unrecognised).
+    #[must_use]
+    pub fn role(&self) -> crate::DeviceRole {
+        self.device_type.as_deref().map_or(
+            crate::DeviceRole::Unknown,
+            crate::DeviceRole::from_device_type,
+        )
+    }
+}
+
 /// A single real-world device, deduplicated across all data sources.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
@@ -215,5 +227,15 @@ mod tests {
             }
         }
         assert_eq!(Criticality::ALL.len(), 4);
+    }
+
+    #[test]
+    fn fingerprint_resolves_its_device_role() {
+        let dc = Fingerprint {
+            device_type: Some("domain-controller".to_owned()),
+            ..Fingerprint::default()
+        };
+        assert_eq!(dc.role(), crate::DeviceRole::DomainController);
+        assert_eq!(Fingerprint::default().role(), crate::DeviceRole::Unknown);
     }
 }

@@ -10,6 +10,7 @@ pub mod finding;
 pub mod ids;
 pub mod network;
 pub mod risk;
+pub mod role;
 pub mod tenant;
 pub mod vuln;
 
@@ -18,5 +19,6 @@ pub use finding::{Finding, FindingSource};
 pub use ids::{AssetId, FindingId, TenantId, UserId};
 pub use network::{Interface, MacAddr, Protocol, Service};
 pub use risk::{RiskBand, RiskInputs, RiskScore};
+pub use role::DeviceRole;
 pub use tenant::{Role, Tenant, User};
 pub use vuln::{Confidence, Cvss, Epss, Severity, Vulnerability};
