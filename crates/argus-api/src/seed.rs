@@ -424,11 +424,31 @@ mod tests {
     fn scored_asset_serializes_with_vulns_and_rfc3339() {
         let assets = seed_assets();
         let json = serde_json::to_string(web_server(&assets)).expect("serialize");
-        assert!(json.contains("\"risk\""));
-        assert!(json.contains("\"vulnerabilities\""));
-        assert!(json.contains("\"services\""));
+        // Wire-contract tripwire: the console (web/src/lib/api.ts) hand-mirrors
+        // this shape with no codegen, so a Rust-side rename would silently break
+        // it. Lock the flattened Asset + ScoredAsset field names it reads — a
+        // rename fails here, loudly, instead of in the browser.
+        for key in [
+            "\"id\"",
+            "\"asset_type\"",
+            "\"criticality\"",
+            "\"exposure\"",
+            "\"fingerprint\"",
+            "\"interfaces\"",
+            "\"first_seen\"",
+            "\"last_seen\"",
+            "\"services\"",
+            "\"vulnerabilities\"",
+            "\"risk\"",
+        ] {
+            assert!(json.contains(key), "ScoredAsset lost wire field {key}");
+        }
+        // Fingerprint sub-fields the console reads (always present, null if unset).
+        for key in ["\"device_type\"", "\"vendor\"", "\"os\"", "\"confidence\""] {
+            assert!(json.contains(key), "Fingerprint lost wire field {key}");
+        }
         assert!(json.contains("CVE-"));
-        assert!(json.contains('T'));
+        assert!(json.contains('T')); // rfc3339 datetime
     }
 
     fn host_with(product: &str, port: u16) -> DiscoveredHost {

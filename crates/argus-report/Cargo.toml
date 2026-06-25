@@ -15,3 +15,8 @@ workspace = true
 argus-core = { path = "../argus-core" }
 serde = { workspace = true }
 time = { workspace = true }
+
+[dev-dependencies]
+# Serialise reports in the wire-contract tripwire test (the console hand-mirrors
+# these JSON shapes; the test locks the field names it depends on).
+serde_json = { workspace = true }

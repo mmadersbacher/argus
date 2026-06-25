@@ -849,3 +849,128 @@ mod tests {
             .any(|h| h.text.contains("monitoring")));
     }
 }
+
+/// Wire-contract tripwire.
+///
+/// The console (`web/src/lib/api.ts`) hand-mirrors these JSON shapes — there is
+/// no codegen, so a Rust-side rename would silently break the console. These
+/// tests serialise a representative report and lock the field names and enum
+/// string values the console reads. Adding a field is fine (backward-compatible
+/// for the console); renaming or removing one it depends on fails here, loudly,
+/// pointing at the TS that must be updated in lockstep.
+#[cfg(test)]
+mod contract {
+    use super::*;
+    use argus_core::{Confidence, Cvss, Epss, Severity, Vulnerability};
+    use serde_json::Value;
+    use time::OffsetDateTime;
+
+    fn sample_report() -> ExposureReport {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let asset = AssetFacts {
+            name: "dc-1".to_owned(),
+            ip: Some("10.0.0.1".to_owned()),
+            asset_type: AssetType::It,
+            device_role: DeviceRole::DomainController,
+            criticality: Criticality::Critical,
+            exposure: Exposure::Internal,
+            risk: RiskScore {
+                value: 90.0,
+                band: RiskBand::Critical,
+                confidence: Confidence::High,
+            },
+            vulns: vec![Vulnerability {
+                cve_id: "CVE-X".to_owned(),
+                cvss: Some(Cvss::new(9.8, None)),
+                epss: Some(Epss::new(0.9, None)),
+                kev: true,
+                severity: Severity::Critical,
+                match_confidence: Confidence::Confirmed,
+            }],
+            first_seen: now,
+            last_seen: now,
+        };
+        let advisory = AdvisoryFact {
+            rule: "tier0-crown-jewel".to_owned(),
+            level: AdvisoryUrgency::Critical,
+            title: "Tier-0 reachable".to_owned(),
+            rationale: "domain-wide blast radius".to_owned(),
+            recommendation: "isolate it".to_owned(),
+            affected: vec!["dc-1".to_owned()],
+        };
+        build(&[asset], &[advisory], &[], None, now, 30)
+    }
+
+    fn has(v: &Value, key: &str) -> bool {
+        v.get(key).is_some()
+    }
+
+    #[test]
+    fn report_wire_shape_is_stable() {
+        let json = serde_json::to_value(sample_report()).expect("serialize");
+        for key in [
+            "generated_at",
+            "period_days",
+            "highlights",
+            "action_plan",
+            "inventory",
+            "risk",
+            "vulnerabilities",
+            "activity",
+            "monitoring",
+        ] {
+            assert!(has(&json, key), "ExposureReport lost wire field `{key}`");
+        }
+        let inv = &json["inventory"];
+        for key in [
+            "total",
+            "internet_facing",
+            "by_type",
+            "by_role",
+            "by_criticality",
+        ] {
+            assert!(has(inv, key), "Inventory lost wire field `{key}`");
+        }
+        // RoleCount shape + DeviceRole serde value (the DC asset drives one row).
+        let role0 = &json["inventory"]["by_role"][0];
+        assert!(
+            has(role0, "role") && has(role0, "count"),
+            "RoleCount shape drifted"
+        );
+        assert_eq!(
+            role0["role"], "domain_controller",
+            "DeviceRole serde value drifted"
+        );
+    }
+
+    #[test]
+    fn action_item_wire_shape_is_stable() {
+        let json = serde_json::to_value(sample_report()).expect("serialize");
+        let plan = json["action_plan"].as_array().expect("action_plan array");
+        assert!(!plan.is_empty(), "expected a populated action plan");
+        for key in [
+            "priority",
+            "title",
+            "action",
+            "effort",
+            "rationale",
+            "affected",
+            "source",
+        ] {
+            assert!(has(&plan[0], key), "ActionItem lost wire field `{key}`");
+        }
+        // Enum string values the console's Records are keyed by.
+        assert!(
+            plan.iter()
+                .filter_map(|i| i["priority"].as_str())
+                .all(|p| matches!(p, "now" | "this_week" | "soon")),
+            "ActionPriority serde value drifted"
+        );
+        assert!(
+            plan.iter()
+                .filter_map(|i| i["effort"].as_str())
+                .all(|e| matches!(e, "quick" | "moderate" | "project")),
+            "ActionEffort serde value drifted"
+        );
+    }
+}
