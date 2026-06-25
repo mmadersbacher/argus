@@ -80,6 +80,20 @@ pub struct Cvss {
     pub vector: Option<String>,
 }
 
+impl Cvss {
+    /// Construct a CVSS score, clamping `base_score` to the valid `0.0..=10.0`
+    /// range (a non-finite value maps to `0.0`). Use this at feed/trust
+    /// boundaries so a malformed NVD value can never produce an out-of-range
+    /// stored score that the risk engine would then trust.
+    #[must_use]
+    pub fn new(base_score: f32, vector: Option<String>) -> Self {
+        Self {
+            base_score: clamp_finite(base_score, 0.0, 10.0),
+            vector,
+        }
+    }
+}
+
 /// EPSS (Exploit Prediction Scoring System) data point.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Epss {
@@ -89,6 +103,28 @@ pub struct Epss {
     /// for offline-catalog entries, which carry an approximate score but no
     /// percentile.
     pub percentile: Option<f32>,
+}
+
+impl Epss {
+    /// Construct an EPSS data point, clamping `score` and `percentile` to
+    /// `0.0..=1.0` (a non-finite value maps to `0.0`).
+    #[must_use]
+    pub fn new(score: f32, percentile: Option<f32>) -> Self {
+        Self {
+            score: clamp_finite(score, 0.0, 1.0),
+            percentile: percentile.map(|p| clamp_finite(p, 0.0, 1.0)),
+        }
+    }
+}
+
+/// Clamp `x` to `[lo, hi]`, mapping a non-finite value to `lo` (`f32::clamp`
+/// alone propagates `NaN`).
+fn clamp_finite(x: f32, lo: f32, hi: f32) -> f32 {
+    if x.is_finite() {
+        x.clamp(lo, hi)
+    } else {
+        lo
+    }
 }
 
 /// A vulnerability affecting one or more assets.
@@ -144,6 +180,22 @@ mod tests {
         assert_eq!(Severity::from_cvss(5.0), Severity::Medium);
         assert_eq!(Severity::from_cvss(3.1), Severity::Low);
         assert_eq!(Severity::from_cvss(0.0), Severity::None);
+    }
+
+    #[test]
+    fn cvss_new_clamps_out_of_range_and_non_finite() {
+        assert!((Cvss::new(99.0, None).base_score - 10.0).abs() < f32::EPSILON);
+        assert!(Cvss::new(-3.0, None).base_score.abs() < f32::EPSILON);
+        assert!(Cvss::new(f32::NAN, None).base_score.abs() < f32::EPSILON);
+        assert!((Cvss::new(7.5, None).base_score - 7.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn epss_new_clamps_score_and_percentile() {
+        let e = Epss::new(5.0, Some(-1.0));
+        assert!((e.score - 1.0).abs() < f32::EPSILON);
+        assert!(e.percentile.expect("percentile").abs() < f32::EPSILON);
+        assert_eq!(Epss::new(0.3, None).percentile, None);
     }
 
     #[test]

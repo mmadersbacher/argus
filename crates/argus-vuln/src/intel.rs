@@ -247,10 +247,7 @@ fn parse_nvd_item(item: &serde_json::Value, vendor: &str, product: &str) -> Opti
     Some(ProductCve {
         vuln: Vulnerability {
             cve_id: id.to_owned(),
-            cvss: score.map(|base_score| Cvss {
-                base_score,
-                vector: None,
-            }),
+            cvss: score.map(|base_score| Cvss::new(base_score, None)),
             epss: None,
             kev: false,
             severity,
@@ -595,10 +592,7 @@ impl IntelCache {
             Some(scores) => {
                 for v in &mut vulns {
                     if let Some(&nvd::EpssScore { score, percentile }) = scores.get(&v.cve_id) {
-                        v.epss = Some(Epss {
-                            score,
-                            percentile: Some(percentile),
-                        });
+                        v.epss = Some(Epss::new(score, Some(percentile)));
                     }
                 }
             }
