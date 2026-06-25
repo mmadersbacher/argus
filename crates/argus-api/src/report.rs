@@ -60,6 +60,7 @@ pub async fn get_report(
                 .iter()
                 .find_map(|i| i.ip.map(|ip| ip.to_string())),
             asset_type: a.asset.asset_type,
+            device_role: a.asset.fingerprint.role(),
             criticality: a.asset.criticality,
             exposure: a.asset.exposure,
             risk: a.risk,

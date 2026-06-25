@@ -10,7 +10,9 @@
 
 use std::collections::HashMap;
 
-use argus_core::{AssetType, Criticality, Exposure, RiskBand, RiskScore, Severity, Vulnerability};
+use argus_core::{
+    AssetType, Criticality, DeviceRole, Exposure, RiskBand, RiskScore, Severity, Vulnerability,
+};
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 
@@ -30,6 +32,8 @@ pub struct AssetFacts {
     pub ip: Option<String>,
     /// Classified asset type.
     pub asset_type: AssetType,
+    /// Typed device role (DC, camera, NAS, …) resolved from the fingerprint.
+    pub device_role: DeviceRole,
     /// Business criticality.
     pub criticality: Criticality,
     /// Network exposure.
@@ -101,6 +105,15 @@ pub struct TypeCount {
     pub count: usize,
 }
 
+/// Count per device role.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoleCount {
+    /// Device role.
+    pub role: DeviceRole,
+    /// Number of assets.
+    pub count: usize,
+}
+
 /// Count per business criticality.
 #[derive(Debug, Clone, Serialize)]
 pub struct CriticalityCount {
@@ -132,6 +145,8 @@ pub struct Inventory {
     pub stale: usize,
     /// Breakdown by asset type (non-zero, largest first).
     pub by_type: Vec<TypeCount>,
+    /// Breakdown by device role (non-zero, largest first).
+    pub by_role: Vec<RoleCount>,
     /// Breakdown by criticality (most critical first, zeros included).
     pub by_criticality: Vec<CriticalityCount>,
 }
@@ -390,6 +405,18 @@ fn inventory(assets: &[AssetFacts], cutoff: OffsetDateTime) -> Inventory {
         .collect();
     by_type.sort_by_key(|t| std::cmp::Reverse(t.count));
 
+    // Same shape as by_type, driven by DeviceRole::ALL so a new role can never
+    // be silently dropped (the core `all_covers_every_variant` guard enforces it).
+    let mut by_role: Vec<RoleCount> = DeviceRole::ALL
+        .into_iter()
+        .map(|role| RoleCount {
+            role,
+            count: assets.iter().filter(|a| a.device_role == role).count(),
+        })
+        .filter(|r| r.count > 0)
+        .collect();
+    by_role.sort_by_key(|r| std::cmp::Reverse(r.count));
+
     // `ALL` is ascending (`Low`..`Critical`); the report shows worst-first.
     let by_criticality = Criticality::ALL
         .into_iter()
@@ -412,6 +439,7 @@ fn inventory(assets: &[AssetFacts], cutoff: OffsetDateTime) -> Inventory {
         new_in_period: assets.iter().filter(|a| a.first_seen >= cutoff).count(),
         stale: assets.iter().filter(|a| a.last_seen < cutoff).count(),
         by_type,
+        by_role,
         by_criticality,
     }
 }
@@ -627,6 +655,7 @@ mod tests {
             name: name.to_owned(),
             ip: None,
             asset_type: AssetType::It,
+            device_role: DeviceRole::Unknown,
             criticality: Criticality::Medium,
             exposure: Exposure::Internal,
             risk: RiskScore {
@@ -638,6 +667,30 @@ mod tests {
             first_seen: at(40),
             last_seen: at(0),
         }
+    }
+
+    #[test]
+    fn inventory_breaks_down_by_device_role() {
+        let mut dc1 = asset("dc-1", 90.0, vec![]);
+        dc1.device_role = DeviceRole::DomainController;
+        let mut dc2 = asset("dc-2", 80.0, vec![]);
+        dc2.device_role = DeviceRole::DomainController;
+        let mut cam = asset("cam-1", 40.0, vec![]);
+        cam.device_role = DeviceRole::Camera;
+        // One asset left as Unknown role.
+        let plain = asset("ws-1", 10.0, vec![]);
+
+        let inv = inventory(&[dc1, dc2, cam, plain], at(30));
+        // Largest first: DomainController=2, then Camera=1 and Unknown=1.
+        assert_eq!(inv.by_role[0].role, DeviceRole::DomainController);
+        assert_eq!(inv.by_role[0].count, 2);
+        assert!(inv
+            .by_role
+            .iter()
+            .any(|r| r.role == DeviceRole::Camera && r.count == 1));
+        // Zero-count roles are excluded.
+        assert!(inv.by_role.iter().all(|r| r.count > 0));
+        assert!(inv.by_role.iter().all(|r| r.role != DeviceRole::Nas));
     }
 
     #[test]
