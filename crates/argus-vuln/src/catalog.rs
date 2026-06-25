@@ -830,4 +830,40 @@ pub const CATALOG: &[CveRecord] = &[
         severity: Severity::High,
         summary: "Unsafe deserialization in REST/JSON:API enables unauth RCE (SA-CORE-2019-003)",
     },
+    // ---- School-prevalent appliances: network gear / firewall / backup ----
+    // (added 2026-06-25; ranges/CVSS/KEV from NVD CPE configs, EPSS from FIRST.org)
+    CveRecord {
+        cve_id: "CVE-2018-14847",
+        product: "RouterOS",
+        // NVD: cpe mikrotik:routeros versionEndIncluding 6.42 (fix 6.42.1). KEV.
+        affected: VersionRange::AtMost("6.42"),
+        cvss: 9.1,
+        epss: 0.961,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "MikroTik RouterOS Winbox unauthenticated directory traversal (arbitrary file read)",
+    },
+    CveRecord {
+        cve_id: "CVE-2022-1040",
+        product: "Sophos Firewall",
+        // NVD: cpe sophos:sfos versionEndIncluding 18.5.3 (v18.5 MR3). KEV.
+        affected: VersionRange::AtMost("18.5.3"),
+        cvss: 9.8,
+        epss: 0.998,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Sophos Firewall (SFOS) authentication bypass enabling RCE on User Portal/Webadmin",
+    },
+    CveRecord {
+        cve_id: "CVE-2024-40711",
+        product: "Veeam",
+        // NVD: veeam backup_and_replication [12.0.0.1420, 12.2.0.334) — half-open
+        // start-inclusive / end-exclusive (fix 12.2.0.334). KEV.
+        affected: VersionRange::Branches(&[("12.0.0.1420", "12.2.0.334")]),
+        cvss: 9.8,
+        epss: 0.882,
+        kev: true,
+        severity: Severity::Critical,
+        summary: "Veeam Backup & Replication unauthenticated deserialization RCE",
+    },
 ];

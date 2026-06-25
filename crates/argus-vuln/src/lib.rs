@@ -410,6 +410,37 @@ mod tests {
     }
 
     #[test]
+    fn school_appliance_cves_match_in_range_only() {
+        // MikroTik RouterOS: affected through 6.42, fixed 6.42.1.
+        assert!(correlate_product("MikroTik RouterOS 6.40")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2018-14847"));
+        assert!(correlate_product("MikroTik RouterOS 6.45")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2018-14847"));
+
+        // Sophos Firewall: through 18.5.3. The two-token product ("Sophos
+        // Firewall") must NOT match other Sophos products (e.g. Anti-Virus).
+        assert!(correlate_product("Sophos Firewall 18.5.1")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2022-1040"));
+        assert!(correlate_product("Sophos Firewall 19.0.0")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2022-1040"));
+        assert!(correlate_product("Sophos Anti-Virus 18.5.1")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2022-1040"));
+
+        // Veeam B&R: half-open [12.0.0.1420, 12.2.0.334).
+        assert!(correlate_product("Veeam Backup 12.1.2.172")
+            .iter()
+            .any(|v| v.cve_id == "CVE-2024-40711"));
+        assert!(correlate_product("Veeam Backup 12.2.0.334")
+            .iter()
+            .all(|v| v.cve_id != "CVE-2024-40711"));
+    }
+
+    #[test]
     fn apache_mod_proxy_cves_do_not_match_pre_2_4_versions() {
         // CVE-2021-40438 / CVE-2023-25690 affect the 2.4 branch only. An
         // unbounded AtMost falsely flagged httpd 1.3/2.0/2.2 as High Critical.
