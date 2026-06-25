@@ -33,6 +33,7 @@ mod graph;
 mod monitor;
 mod policy;
 mod report;
+mod scan;
 mod seed;
 mod store;
 mod vulns;
@@ -452,118 +453,6 @@ struct ScanResponse {
     changes: usize,
 }
 
-/// Outcome of one discovery run: which engine ran and what it found.
-struct Discovery {
-    /// Engine label (`masscan+nmap-os`, `nmap`, or `connect`).
-    engine: &'static str,
-    /// Live hosts found.
-    hosts: Vec<argus_discovery::DiscoveredHost>,
-    /// Number of candidate addresses the target spec expanded to.
-    candidates: usize,
-}
-
-/// Reject a scan whose target expands to any private/internal/special address
-/// unless the deployment explicitly allows internal scanning. Stops a hosted,
-/// multi-tenant server from being used as an internal-network pivot (SSRF).
-pub(crate) fn reject_private_targets(
-    ips: &[std::net::IpAddr],
-    allow_private: bool,
-) -> Result<(), (StatusCode, String)> {
-    if allow_private {
-        return Ok(());
-    }
-    if let Some(ip) = ips
-        .iter()
-        .find(|ip| argus_discovery::is_disallowed_target(**ip))
-    {
-        return Err((
-            StatusCode::FORBIDDEN,
-            format!(
-                "target {ip} is in a private/internal range; this server only scans public \
-                 addresses. Set ARGUS_SCAN_ALLOW_PRIVATE=true to scan internal networks \
-                 (on-prem / self-hosted)."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Expand `target` and run discovery with the best available engine: the
-/// privileged deep path (masscan sweep + nmap SYN/OS, needs root) when
-/// requested, else nmap when installed, else the built-in connect scanner.
-/// Shared by `POST /api/scan` and the monitor scheduler.
-async fn discover(
-    target: &str,
-    deep: bool,
-    allow_private: bool,
-) -> Result<Discovery, (StatusCode, String)> {
-    let ips =
-        argus_discovery::expand(target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    reject_private_targets(&ips, allow_private)?;
-
-    // Deep scan first when requested. Best-effort — an empty result
-    // (unprivileged, or nothing live) falls through to the standard
-    // nmap/connect path below.
-    let deep_hosts = if deep {
-        argus_discovery::deep_scan(
-            target,
-            argus_discovery::fingerprint::PORTS,
-            argus_discovery::masscan::DEFAULT_RATE,
-            Duration::from_secs(120),
-        )
-        .await
-    } else {
-        Vec::new()
-    };
-
-    let (engine, mut hosts) = if !deep_hosts.is_empty() {
-        ("masscan+nmap-os", deep_hosts)
-    } else if argus_discovery::nmap::available().await {
-        match argus_discovery::nmap::scan(
-            target,
-            argus_discovery::fingerprint::PORTS,
-            Duration::from_secs(120),
-        )
-        .await
-        {
-            Ok(found) => ("nmap", found),
-            Err(err) => {
-                tracing::warn!(error = %err, "nmap failed; falling back to connect scan");
-                let report = argus_discovery::scan(
-                    &ips,
-                    &argus_discovery::ScanOptions {
-                        sample: true,
-                        ..Default::default()
-                    },
-                )
-                .await;
-                ("connect", report.live)
-            }
-        }
-    } else {
-        let report = argus_discovery::scan(
-            &ips,
-            &argus_discovery::ScanOptions {
-                sample: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        ("connect", report.live)
-    };
-
-    // Unified enrichment for every engine: mDNS hostnames/models + MAC/OUI
-    // vendor + signal fusion. Makes a Raspberry Pi show up as
-    // raspberrypi.local / Raspberry Pi / Linux instead of a bare IP.
-    argus_discovery::enrich(&mut hosts, &ips).await;
-
-    Ok(Discovery {
-        engine,
-        hosts,
-        candidates: ips.len(),
-    })
-}
-
 /// Run a discovery scan and upsert the results into the caller's inventory.
 ///
 /// Requires the `analyst` role. Body: `{ "target": "<ip|cidr>" }` (defaults
@@ -587,10 +476,10 @@ async fn run_scan(
     let deep = req.deep.unwrap_or(false);
 
     let started = Instant::now();
-    let discovery = discover(&target, deep, state.scan_allow_private).await?;
+    let discovery = scan::discover(&target, deep, state.scan_allow_private).await?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let Discovery {
+    let scan::Discovery {
         engine,
         hosts,
         candidates,
@@ -848,7 +737,7 @@ async fn run_scheduled_scan(
     allow_private: bool,
 ) {
     let result = async {
-        let discovery = discover(&claimed.target, claimed.deep, allow_private).await?;
+        let discovery = scan::discover(&claimed.target, claimed.deep, allow_private).await?;
         let (live, changes) = ingest(
             store,
             ingest_locks,

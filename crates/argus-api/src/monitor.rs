@@ -245,7 +245,7 @@ pub async fn set_monitor(
     let target = req.target.trim();
     let ips =
         argus_discovery::expand(target).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    crate::reject_private_targets(&ips, state.scan_allow_private)?;
+    crate::scan::reject_private_targets(&ips, state.scan_allow_private)?;
     if !(1..=1440).contains(&req.interval_minutes) {
         return Err((
             StatusCode::BAD_REQUEST,
