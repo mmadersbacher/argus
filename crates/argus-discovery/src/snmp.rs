@@ -12,6 +12,8 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
+use crate::ber::{read_tlv, tlv};
+
 // System-group OIDs, BER-encoded (1.3 → 0x2B, then one byte per sub-identifier).
 const SYS_DESCR: &[u8] = &[0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00]; // .1.1.1.0
 const SYS_OBJECT_ID: &[u8] = &[0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x02, 0x00]; // .1.1.2.0
@@ -26,26 +28,6 @@ pub struct SnmpResult {
     pub name: Option<String>,
     /// `sysObjectID.0` — vendor/product OID, dotted.
     pub object_id: Option<String>,
-}
-
-fn ber_len(len: usize) -> Vec<u8> {
-    match u8::try_from(len) {
-        Ok(b) if b < 0x80 => vec![b], // short form (< 128)
-        Ok(b) => vec![0x81, b],       // single-byte long form (128..=255)
-        Err(_) => {
-            let hi = u8::try_from((len >> 8) & 0xff).unwrap_or(0xff);
-            let lo = u8::try_from(len & 0xff).unwrap_or(0xff);
-            vec![0x82, hi, lo]
-        }
-    }
-}
-
-/// Tag-length-value wrap.
-fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut v = vec![tag];
-    v.extend(ber_len(content.len()));
-    v.extend_from_slice(content);
-    v
 }
 
 fn get_request() -> Vec<u8> {
@@ -81,30 +63,6 @@ pub async fn query(ip: IpAddr, wait: Duration) -> Option<SnmpResult> {
     let mut buf = [0u8; 4096];
     let (n, _) = timeout(wait, sock.recv_from(&mut buf)).await.ok()?.ok()?;
     parse(&buf[..n])
-}
-
-/// Read one BER element: returns (tag, content range start, content end, end).
-fn read_tlv(buf: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
-    let tag = *buf.get(pos)?;
-    let first = *buf.get(pos + 1)?;
-    let (len, body) = if first < 0x80 {
-        (first as usize, pos + 2)
-    } else {
-        let n = (first & 0x7f) as usize;
-        // Reject indefinite form (n==0) and absurd long-form lengths (>4 bytes ⇒
-        // multi-GB, impossible in a 4 KiB datagram). Mirrors ldap.rs; without
-        // the cap, `len << 8` over n unbounded bytes overflows and the final
-        // `body + len` panics in debug builds on a crafted reply.
-        if n == 0 || n > 4 {
-            return None;
-        }
-        let mut len = 0usize;
-        for i in 0..n {
-            len = (len << 8) | *buf.get(pos + 2 + i)? as usize;
-        }
-        (len, pos + 2 + n)
-    };
-    Some((tag, body, body.checked_add(len)?))
 }
 
 fn oid_to_string(oid: &[u8]) -> String {
@@ -198,16 +156,6 @@ mod tests {
     #[test]
     fn oid_encodes_to_dotted() {
         assert_eq!(oid_to_string(SYS_DESCR), "1.3.6.1.2.1.1.1.0");
-    }
-
-    #[test]
-    fn read_tlv_rejects_overlong_length_without_overflow() {
-        // Long-form length claiming 8 bytes of 0xFF: `len` would be ~u64::MAX and
-        // `body + len` panics in debug builds. Must be rejected, not panic.
-        let buf = [0x30, 0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
-        assert!(read_tlv(&buf, 0).is_none());
-        // A truncated long-form header must also be safe (no slice panic).
-        assert!(read_tlv(&[0x30, 0x82, 0x01], 0).is_none());
     }
 
     #[test]

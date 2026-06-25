@@ -11,6 +11,8 @@ pub mod arp;
 pub mod arpscan;
 pub mod bacnet;
 pub mod banner;
+/// Shared hand-rolled ASN.1 BER codec for the SNMP and LDAP probes.
+pub(crate) mod ber;
 pub mod coap;
 pub mod enip;
 pub mod fingerprint;

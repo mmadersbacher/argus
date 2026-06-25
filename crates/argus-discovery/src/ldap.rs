@@ -25,6 +25,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+use crate::ber::{read_tlv, tlv, tlv_string};
+
 /// Cap on the response read. A rootDSE reply is a handful of short attributes;
 /// 16 KiB is generous headroom and bounds a hostile/oversized server.
 const RESPONSE_READ: usize = 16 * 1024;
@@ -57,28 +59,6 @@ pub struct LdapRootDse {
     pub server_name: Option<String>,
     /// `vendorName` — the directory vendor string, when present.
     pub vendor_name: Option<String>,
-}
-
-/// BER length encoding: short form for `< 128`, else long form
-/// (`0x81 nn` for one byte, `0x82 hi lo` for two).
-fn ber_len(len: usize) -> Vec<u8> {
-    match u8::try_from(len) {
-        Ok(b) if b < 0x80 => vec![b], // short form (< 128)
-        Ok(b) => vec![0x81, b],       // single-byte long form (128..=255)
-        Err(_) => {
-            let hi = u8::try_from((len >> 8) & 0xff).unwrap_or(0xff);
-            let lo = u8::try_from(len & 0xff).unwrap_or(0xff);
-            vec![0x82, hi, lo]
-        }
-    }
-}
-
-/// Tag-length-value wrap.
-fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut v = vec![tag];
-    v.extend(ber_len(content.len()));
-    v.extend_from_slice(content);
-    v
 }
 
 /// Build the rootDSE `searchRequest` `LDAPMessage` (RFC 4511 §4.5.1).
@@ -151,42 +131,6 @@ pub async fn query(ip: IpAddr, port: u16, wait: Duration) -> Option<LdapRootDse>
         return None;
     }
     parse_root_dse(&buf)
-}
-
-/// Read one BER element at `pos`: returns `(tag, content_start, content_end)`.
-/// Mirrors the SNMP module's reader. Long-form lengths up to four bytes are
-/// supported; anything wider, or a length that overruns the buffer, yields
-/// `None`.
-fn read_tlv(buf: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
-    let tag = *buf.get(pos)?;
-    let first = *buf.get(pos + 1)?;
-    let (len, body) = if first < 0x80 {
-        (usize::from(first), pos + 2)
-    } else {
-        let n = usize::from(first & 0x7f);
-        if n == 0 || n > 4 {
-            return None; // indefinite form / absurd width: reject.
-        }
-        let mut len = 0usize;
-        for i in 0..n {
-            len = (len << 8) | usize::from(*buf.get(pos + 2 + i)?);
-        }
-        (len, pos + 2 + n)
-    };
-    let end = body.checked_add(len)?;
-    if end > buf.len() {
-        return None;
-    }
-    Some((tag, body, end))
-}
-
-/// Read a BER element's value as a trimmed UTF-8 string (lossy).
-fn tlv_string(buf: &[u8], body: usize, end: usize) -> Option<String> {
-    Some(
-        String::from_utf8_lossy(buf.get(body..end)?)
-            .trim()
-            .to_owned(),
-    )
 }
 
 /// Parse an LDAP response and pull the rootDSE attributes we care about.
@@ -587,16 +531,6 @@ mod tests {
         assert_eq!(parse_root_dse(b"HTTP/1.1 400 Bad Request\r\n\r\n"), None);
         // A truncated length that overruns the buffer must not panic.
         assert_eq!(parse_root_dse(&[0x30, 0x82, 0xFF, 0xFF]), None);
-    }
-
-    #[test]
-    fn ber_len_short_and_long_forms() {
-        assert_eq!(ber_len(0), vec![0x00]);
-        assert_eq!(ber_len(127), vec![0x7F]);
-        assert_eq!(ber_len(128), vec![0x81, 0x80]);
-        assert_eq!(ber_len(255), vec![0x81, 0xFF]);
-        assert_eq!(ber_len(256), vec![0x82, 0x01, 0x00]);
-        assert_eq!(ber_len(0x1234), vec![0x82, 0x12, 0x34]);
     }
 
     /// Build one user `searchResEntry` (objectName DN + sAMAccountName + UAC).
