@@ -26,7 +26,20 @@ pub enum RiskBand {
 }
 
 impl RiskBand {
-    /// Map a numeric `0..=100` score onto a band.
+    /// Every band, in declaration order (`Info`..`Critical`). Single source of
+    /// truth for callers that enumerate all bands (risk distributions); kept
+    /// exhaustive by the `all_bands` test.
+    pub const ALL: [Self; 5] = [
+        Self::Info,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Critical,
+    ];
+
+    /// Map a numeric `0..=100` score onto a band. A non-finite `value` (which
+    /// `compute` never produces, but a direct caller could pass) maps to
+    /// [`RiskBand::Info`], since every `>=` comparison against `NaN` is false.
     #[must_use]
     pub fn from_value(value: f32) -> Self {
         if value >= 80.0 {
@@ -106,8 +119,12 @@ impl RiskScore {
     /// criticality factors.
     #[must_use]
     pub fn compute(input: &RiskInputs) -> Self {
-        let severity = (input.max_cvss / 10.0).clamp(0.0, 1.0);
-        let epss = input.max_epss.clamp(0.0, 1.0);
+        // `f32::clamp` propagates NaN, so a non-finite CVSS/EPSS (a malformed
+        // feed value) would poison the whole computation into a NaN score that
+        // `RiskBand::from_value` then silently bands as `Info`. Map non-finite
+        // inputs to 0.0 explicitly so the score stays finite and trustworthy.
+        let severity = sanitize_unit(input.max_cvss / 10.0);
+        let epss = sanitize_unit(input.max_epss);
         let likelihood = if input.kev_present {
             epss.max(0.9)
         } else {
@@ -138,6 +155,18 @@ impl RiskScore {
     }
 }
 
+/// Clamp `x` to `0.0..=1.0`, mapping any non-finite value to `0.0`.
+///
+/// `f32::clamp` alone returns `self` for `NaN`, so it cannot sanitise a
+/// malformed input on its own.
+fn sanitize_unit(x: f32) -> f32 {
+    if x.is_finite() {
+        x.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// Attack-surface multiplier `1.0 ..= 1.0 + SURFACE_MAX_UPLIFT`.
 ///
 /// Critical findings count fully, High at half; Medium/Low are excluded —
@@ -151,7 +180,19 @@ fn surface_uplift(input: &RiskInputs) -> f32 {
     let critical = f32::from(u16::try_from(input.critical_vulns).unwrap_or(u16::MAX));
     let high = f32::from(u16::try_from(input.high_vulns).unwrap_or(u16::MAX));
     let weighted = 0.5f32.mul_add(high, critical);
-    let beyond_worst = (weighted - 1.0).max(0.0);
+    // Subtract the *actual* weight of the single worst finding (already counted
+    // in `severity`): 1.0 if a Critical drives the score, 0.5 if the worst is a
+    // High, 0.0 if there are no serious findings. A flat 1.0 here zeroed the
+    // uplift for High-only hosts (two Highs weigh 1.0 → nothing "beyond"),
+    // contradicting the rule that the 2nd serious finding should move the score.
+    let worst_weight = if critical >= 1.0 {
+        1.0
+    } else if high >= 1.0 {
+        0.5
+    } else {
+        0.0
+    };
+    let beyond_worst = (weighted - worst_weight).max(0.0);
     let surface = 1.0 - (-beyond_worst / SURFACE_SCALE).exp();
     SURFACE_MAX_UPLIFT.mul_add(surface, 1.0)
 }
@@ -268,6 +309,70 @@ mod tests {
         assert!((twohundred - forty).abs() < 0.5);
         let lone = RiskScore::compute(&mk(1)).value;
         assert!(twohundred <= lone * (1.0 + SURFACE_MAX_UPLIFT) + 1e-3);
+    }
+
+    #[test]
+    fn two_high_findings_engage_the_surface_uplift() {
+        // Regression: the worst finding's weight (0.5 for a High) is what gets
+        // subtracted, so a 2nd High *beyond* the worst lifts the score. The old
+        // flat 1.0 subtraction zeroed the uplift for High-only hosts (this test
+        // would fail then: one and two Highs scored identically).
+        let base = RiskInputs {
+            max_cvss: 7.5,
+            max_epss: 0.2,
+            kev_present: false,
+            critical_vulns: 0,
+            high_vulns: 1,
+            exposure: Exposure::InternetFacing,
+            criticality: Criticality::High,
+            confidence: Confidence::Confirmed,
+        };
+        let two = RiskInputs {
+            high_vulns: 2,
+            ..base
+        };
+        assert!(RiskScore::compute(&two).value > RiskScore::compute(&base).value);
+    }
+
+    #[test]
+    fn non_finite_inputs_never_produce_a_nan_score() {
+        // A malformed feed value (NaN/Inf CVSS or EPSS) must not poison the
+        // score into NaN — which `from_value` would silently band as `Info`.
+        for (cvss, epss) in [
+            (f32::NAN, 0.5),
+            (9.8, f32::NAN),
+            (f32::INFINITY, f32::NEG_INFINITY),
+        ] {
+            let s = RiskScore::compute(&RiskInputs {
+                max_cvss: cvss,
+                max_epss: epss,
+                kev_present: false,
+                critical_vulns: 0,
+                high_vulns: 0,
+                exposure: Exposure::InternetFacing,
+                criticality: Criticality::Critical,
+                confidence: Confidence::Confirmed,
+            });
+            assert!(
+                s.value.is_finite(),
+                "score must stay finite for {cvss}/{epss}"
+            );
+            assert!((0.0..=100.0).contains(&s.value));
+        }
+    }
+
+    #[test]
+    fn all_bands_is_exhaustive() {
+        for b in RiskBand::ALL {
+            match b {
+                RiskBand::Info
+                | RiskBand::Low
+                | RiskBand::Medium
+                | RiskBand::High
+                | RiskBand::Critical => {}
+            }
+        }
+        assert_eq!(RiskBand::ALL.len(), 5);
     }
 
     #[test]

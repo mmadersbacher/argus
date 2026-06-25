@@ -7,7 +7,14 @@ use crate::ids::AssetId;
 use crate::network::Interface;
 
 /// Broad class of an asset, mirroring the IT/OT/IoT/IoMT taxonomy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// `Ord`/`Hash` are derived so callers can group or sort assets by type
+/// directly (e.g. a `BTreeMap<AssetType, _>`) instead of keying on the fragile
+/// `Debug` string. Order follows declaration order and carries no severity
+/// meaning.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetType {
     /// Traditional IT (servers, workstations, laptops).
@@ -29,6 +36,23 @@ pub enum AssetType {
     Unknown,
 }
 
+impl AssetType {
+    /// Every variant, in declaration order — the single source of truth for
+    /// callers that must enumerate all types (reports, dashboards). Adding a
+    /// variant without extending this is caught by `all_covers_every_variant`
+    /// in the tests, so a new type can never be silently dropped from a report.
+    pub const ALL: [Self; 8] = [
+        Self::It,
+        Self::Ot,
+        Self::Iot,
+        Self::Iomt,
+        Self::Network,
+        Self::Cloud,
+        Self::Mobile,
+        Self::Unknown,
+    ];
+}
+
 /// Business criticality of an asset. Ordered: `Low < Medium < High < Critical`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +66,13 @@ pub enum Criticality {
     High,
     /// Mission-critical.
     Critical,
+}
+
+impl Criticality {
+    /// Every level, in declaration order (`Low`..`Critical`). Single source of
+    /// truth for callers that enumerate all levels; kept exhaustive by
+    /// `all_covers_every_variant`.
+    pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::Critical];
 }
 
 /// Network exposure of an asset.
@@ -154,5 +185,35 @@ mod tests {
     #[test]
     fn criticality_is_ordered() {
         assert!(Criticality::Critical > Criticality::Low);
+    }
+
+    #[test]
+    fn all_covers_every_variant() {
+        // The exhaustive matches below stop compiling the moment a variant is
+        // added without being placed in `ALL` — turning a silent report-drop
+        // into a build failure. The length asserts pin the count.
+        for t in AssetType::ALL {
+            match t {
+                AssetType::It
+                | AssetType::Ot
+                | AssetType::Iot
+                | AssetType::Iomt
+                | AssetType::Network
+                | AssetType::Cloud
+                | AssetType::Mobile
+                | AssetType::Unknown => {}
+            }
+        }
+        assert_eq!(AssetType::ALL.len(), 8);
+
+        for c in Criticality::ALL {
+            match c {
+                Criticality::Low
+                | Criticality::Medium
+                | Criticality::High
+                | Criticality::Critical => {}
+            }
+        }
+        assert_eq!(Criticality::ALL.len(), 4);
     }
 }
