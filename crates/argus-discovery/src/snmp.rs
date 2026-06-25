@@ -91,13 +91,20 @@ fn read_tlv(buf: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
         (first as usize, pos + 2)
     } else {
         let n = (first & 0x7f) as usize;
+        // Reject indefinite form (n==0) and absurd long-form lengths (>4 bytes ⇒
+        // multi-GB, impossible in a 4 KiB datagram). Mirrors ldap.rs; without
+        // the cap, `len << 8` over n unbounded bytes overflows and the final
+        // `body + len` panics in debug builds on a crafted reply.
+        if n == 0 || n > 4 {
+            return None;
+        }
         let mut len = 0usize;
         for i in 0..n {
             len = (len << 8) | *buf.get(pos + 2 + i)? as usize;
         }
         (len, pos + 2 + n)
     };
-    Some((tag, body, body + len))
+    Some((tag, body, body.checked_add(len)?))
 }
 
 fn oid_to_string(oid: &[u8]) -> String {
@@ -191,6 +198,16 @@ mod tests {
     #[test]
     fn oid_encodes_to_dotted() {
         assert_eq!(oid_to_string(SYS_DESCR), "1.3.6.1.2.1.1.1.0");
+    }
+
+    #[test]
+    fn read_tlv_rejects_overlong_length_without_overflow() {
+        // Long-form length claiming 8 bytes of 0xFF: `len` would be ~u64::MAX and
+        // `body + len` panics in debug builds. Must be rejected, not panic.
+        let buf = [0x30, 0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert!(read_tlv(&buf, 0).is_none());
+        // A truncated long-form header must also be safe (no slice panic).
+        assert!(read_tlv(&[0x30, 0x82, 0x01], 0).is_none());
     }
 
     #[test]
