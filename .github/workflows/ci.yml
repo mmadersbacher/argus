@@ -67,4 +67,9 @@ jobs:
       # An exposure-management product must scan its own supply chain against the
       # RustSec advisory DB. Fails CI on a known-vulnerable dependency.
       - run: cargo install cargo-audit --locked
-      - run: cargo audit
+      # RUSTSEC-2023-0071 (rsa Marvin timing side-channel, no fix available) is
+      # ignored: `rsa` is pulled only by sqlx-mysql, which sqlx's `macros`
+      # feature compiles for query-validation. This app uses Postgres + HS256
+      # JWTs exclusively, so no RSA decryption path is ever reached at runtime.
+      # Revisit when an rsa fix ships or sqlx stops pulling unused drivers.
+      - run: cargo audit --ignore RUSTSEC-2023-0071
