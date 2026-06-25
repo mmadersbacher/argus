@@ -1,27 +1,35 @@
 //! FF2 evaluation — prioritisation quality.
 //!
-//! Research question FF2: does the context-aware composite score (CVSS + EPSS +
-//! KEV + exposure + criticality) prioritise vulnerabilities better than a raw
-//! CVSS sort? Ground truth is the CISA KEV catalog ("really exploited" → should
-//! rank high). The harness ranks a dataset both ways and reports, for each, KEV
-//! recall@N, the mean rank of KEV CVEs plus its size-invariant standards
-//! ROC-AUC (separation of exploited from non-exploited) and average precision
-//! (the rare-positive ranking standard), and which exploited CVEs CVSS-only
-//! under-ranks — including the NVD-gap case (a KEV CVE with no CVSS at all).
+//! Research question FF2: does the context-aware composite score prioritise
+//! vulnerabilities better than a raw CVSS sort? Ground truth is the CISA KEV
+//! catalog ("really exploited" → should rank high). The harness ranks a dataset
+//! three ways and reports KEV recall@N, mean KEV rank, ROC-AUC (separation of
+//! exploited from non-exploited) and average precision (the rare-positive
+//! ranking standard).
+//!
+//! ## Avoiding circularity (the measure that actually counts)
+//!
+//! KEV is the ground truth **and** an input to the full composite (it floors the
+//! likelihood term to ≥0.9, see [`argus_core::RiskScore::compute`]). Scoring the
+//! full composite against KEV is therefore partly *definitional* — a chunk of
+//! its separation is engineered, not discovered, and must not be reported as
+//! predictive power. So the harness reports a third ranking, **`comp -KEV`**: the
+//! same composite with KEV forced off (CVSS + EPSS only). Its ROC-AUC against KEV
+//! is the **non-circular** result — can the model rank exploited bugs high
+//! *without* being told they are exploited? Any lift there over CVSS-only is real
+//! predictive signal, carried by EPSS (itself an independent exploitation-
+//! probability model). The full `composite` column is kept to show the shipped
+//! product's ranking, not as evidence of predictive power.
+//!
+//! A fully non-circular alternative (future work) is a **temporal holdout**:
+//! score CVEs on a pre-date snapshot and measure recall against CVEs *added* to
+//! KEV afterwards. The `comp -KEV` column is the cheap, dataset-local proxy.
 //!
 //! Dataset: a small curated CSV is embedded as the default; pass a path to run
 //! against a real one — `cargo run -p argus-eval -- ff2 <file.csv>` with columns
 //! `cve_id,cvss,epss,kev` (empty cvss = NVD has not scored it). The measurement
 //! logic is dataset-agnostic; for a headline result feed the full FIRST.org
 //! EPSS set joined with CISA KEV and NVD CVSS.
-//!
-//! Headline result on the full 2026-06-16 snapshot (340,656 CVEs with an EPSS
-//! score, 1,622 on CISA KEV): the composite cuts the mean rank of exploited
-//! (KEV) CVEs from ~80,100 under a CVSS-only sort to ~2,210 — exploited bugs
-//! land in the top ~0.6% instead of the middle of the pack. CVSS-only can't
-//! separate the exploited 9.8s from the thousands of non-exploited 9.8s; the
-//! KEV/EPSS-aware composite can. Reproduce via `scripts/fetch_nvd_cvss.ps1` +
-//! `scripts/join_ff2.ps1` then `-- ff2 data/real/ff2-real.csv`.
 
 use argus_core::{
     Confidence, Criticality, Cvss, Epss, Exposure, RiskScore, Severity, Vulnerability,
@@ -36,7 +44,14 @@ struct Finding {
     id: String,
     cvss: Option<f32>,
     kev: bool,
+    /// The full product composite (CVSS + EPSS + KEV floor + exposure/crit).
     composite: f32,
+    /// The composite with KEV **forced off** — CVSS + EPSS only. Measured
+    /// against KEV ground truth this is the *non-circular* predictive signal:
+    /// can the model rank exploited bugs high *without* being told they are
+    /// exploited? (The full `composite` uses KEV as an input, so scoring it
+    /// against KEV is partly definitional — see the module docs.)
+    composite_no_kev: f32,
 }
 
 /// Composite score for a single CVE on a maximally-exposed, critical asset
@@ -84,6 +99,7 @@ fn parse_dataset(csv: &str) -> Vec<Finding> {
             let kev = matches!(col.next()?.trim(), "true" | "1" | "yes");
             Some(Finding {
                 composite: composite_score(cvss, epss, kev),
+                composite_no_kev: composite_score(cvss, epss, false),
                 id: id.to_owned(),
                 cvss,
                 kev,
@@ -107,6 +123,14 @@ fn rank_by_cvss(f: &[Finding]) -> Vec<usize> {
 fn rank_by_composite(f: &[Finding]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..f.len()).collect();
     idx.sort_by(|&a, &b| f[b].composite.total_cmp(&f[a].composite));
+    idx
+}
+
+/// Indices ordered by descending KEV-excluded composite (the non-circular
+/// predictive ranking).
+fn rank_by_composite_no_kev(f: &[Finding]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..f.len()).collect();
+    idx.sort_by(|&a, &b| f[b].composite_no_kev.total_cmp(&f[a].composite_no_kev));
     idx
 }
 
@@ -222,47 +246,58 @@ pub fn run(path: Option<String>) {
     let no_cvss = findings.iter().filter(|f| f.cvss.is_none()).count();
     let by_cvss = rank_by_cvss(&findings);
     let by_comp = rank_by_composite(&findings);
+    let by_comp_nokev = rank_by_composite_no_kev(&findings);
 
     println!("FF2 — prioritisation: composite vs CVSS-only (ground truth: CISA KEV)");
-    println!("dataset: {total} CVEs, {kev_n} KEV, {no_cvss} without CVSS (NVD gap)\n");
-
-    println!("{:<18} {:>11} {:>11}", "metric", "CVSS-only", "composite");
+    println!("dataset: {total} CVEs, {kev_n} KEV, {no_cvss} without CVSS (NVD gap)");
     println!(
-        "{:<18} {:>11.2} {:>11.2}",
+        "  'comp -KEV' (CVSS+EPSS, KEV excluded from the score) is the NON-CIRCULAR\n  \
+         predictive measure; the full 'composite' uses KEV as an input, so scoring\n  \
+         it against KEV is partly definitional — read 'comp -KEV' as the real signal.\n"
+    );
+
+    println!(
+        "{:<18} {:>11} {:>11} {:>11}",
+        "metric", "CVSS-only", "comp -KEV", "composite"
+    );
+    println!(
+        "{:<18} {:>11.2} {:>11.2} {:>11.2}",
         "KEV recall@N",
         kev_recall(&findings, &by_cvss, kev_n),
+        kev_recall(&findings, &by_comp_nokev, kev_n),
         kev_recall(&findings, &by_comp, kev_n),
     );
     println!(
-        "{:<18} {:>11.2} {:>11.2}  (lower=better)",
+        "{:<18} {:>11.2} {:>11.2} {:>11.2}  (lower=better)",
         "mean KEV rank",
         mean_kev_rank(&findings, &by_cvss),
+        mean_kev_rank(&findings, &by_comp_nokev),
         mean_kev_rank(&findings, &by_comp),
     );
     // Size-invariant standards: the mean rank above scales with N and is hard to
     // compare across datasets; ROC-AUC and average precision are not.
-    println!(
-        "{:<18} {:>11.2} {:>11.2}  (mean rank as % of N, lower=better)",
-        "mean KEV %ile",
-        100.0 * mean_kev_rank(&findings, &by_cvss) / total as f64,
-        100.0 * mean_kev_rank(&findings, &by_comp) / total as f64,
-    );
     let is_kev: Vec<bool> = findings.iter().map(|f| f.kev).collect();
     let cvss_scores: Vec<f64> = findings
         .iter()
         .map(|f| f.cvss.map_or(f64::NEG_INFINITY, f64::from))
         .collect();
     let comp_scores: Vec<f64> = findings.iter().map(|f| f64::from(f.composite)).collect();
+    let comp_nokev_scores: Vec<f64> = findings
+        .iter()
+        .map(|f| f64::from(f.composite_no_kev))
+        .collect();
     println!(
-        "{:<18} {:>11.3} {:>11.3}  (0.5=chance, higher=better)",
+        "{:<18} {:>11.3} {:>11.3} {:>11.3}  (0.5=chance, higher=better)",
         "ROC-AUC",
         roc_auc(&cvss_scores, &is_kev),
+        roc_auc(&comp_nokev_scores, &is_kev),
         roc_auc(&comp_scores, &is_kev),
     );
     println!(
-        "{:<18} {:>11.3} {:>11.3}  (higher=better)",
+        "{:<18} {:>11.3} {:>11.3} {:>11.3}  (higher=better)",
         "avg precision",
         average_precision(&findings, &by_cvss),
+        average_precision(&findings, &by_comp_nokev),
         average_precision(&findings, &by_comp),
     );
 
@@ -353,6 +388,31 @@ mod tests {
         // The composite ranks both KEV CVEs first → every positive at precision 1.
         let ap = average_precision(&f, &rank_by_composite(&f));
         assert!((ap - 1.0).abs() < 1e-9, "AP should be 1.0, got {ap}");
+    }
+
+    #[test]
+    fn no_kev_composite_excludes_the_kev_floor() {
+        // The non-circular measure: with KEV forced off, the 0.9 likelihood
+        // floor must NOT apply. For a KEV CVE with low EPSS, excluding KEV lowers
+        // the score (the floor only lifts the full composite).
+        let full = composite_score(Some(5.0), 0.01, true);
+        let no_kev = composite_score(Some(5.0), 0.01, false);
+        assert!(
+            no_kev < full,
+            "KEV floor must only affect the full composite"
+        );
+        // When EPSS already exceeds the floor, KEV adds nothing → the two agree.
+        let full_hi = composite_score(Some(5.0), 0.95, true);
+        let nokev_hi = composite_score(Some(5.0), 0.95, false);
+        assert!((full_hi - nokev_hi).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_kev_composite_is_populated_and_drops_the_floor_on_a_dataset() {
+        let f = parse_dataset("CVE-k,5.0,0.01,true\nCVE-n,5.0,0.01,false\n");
+        let kev = f.iter().find(|x| x.id == "CVE-k").expect("kev row");
+        // The KEV row's full composite is floored above its KEV-excluded one.
+        assert!(kev.composite > kev.composite_no_kev);
     }
 
     #[test]

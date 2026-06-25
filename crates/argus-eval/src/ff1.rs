@@ -152,6 +152,13 @@ pub fn run(path: Option<String>) {
     let missed = outcomes.iter().filter(|o| !o.reported && o.applies).count();
     let applies_total = outcomes.iter().filter(|o| o.applies).count();
     let recall = precision(tp, applies_total); // tp / (tp + fn)
+                                               // Count *distinct* CVE ids — the set has a variable number of rows per CVE,
+                                               // so the old `cases.len() / 2` over-reported the CVE count by ~2x.
+    let distinct_cves = cases
+        .iter()
+        .map(|c| c.cve_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
 
     println!("FF1 — correlation precision & honest confidence (ground truth: NVD/vendor ranges)");
     println!(
@@ -159,7 +166,7 @@ pub fn run(path: Option<String>) {
         cases.len(),
         applies_total,
         cases.len() - applies_total,
-        cases.len() / 2,
+        distinct_cves,
     );
 
     println!(
