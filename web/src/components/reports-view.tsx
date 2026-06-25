@@ -9,6 +9,9 @@ import { useState } from "react";
 import type { HighlightLevel, ReportTopAsset, ReportTopCve } from "@/lib/api";
 import { useReport } from "@/lib/use-report";
 import {
+  actionEffortLabel,
+  actionPriorityLabel,
+  actionPriorityStyle,
   assetTypeLabel,
   bandStyles,
   deviceRoleLabel,
@@ -342,6 +345,52 @@ export function ReportsView() {
             ))}
           </ul>
         </Panel>
+
+        {/* fix-this-week action plan — the headline deliverable */}
+        {report.action_plan && report.action_plan.length > 0 ? (
+          <Panel title="Fix these this week">
+            <ol className="space-y-3">
+              {report.action_plan.map((item, i) => (
+                <li
+                  key={`${item.title}-${i}`}
+                  className="flex items-start gap-3"
+                >
+                  <span
+                    className={`mt-1.5 size-2 shrink-0 rounded-full ${actionPriorityStyle[item.priority].dot}`}
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-sm font-medium text-fg">
+                        {item.title}
+                      </span>
+                      <span
+                        className={`text-[11px] font-semibold uppercase tracking-[0.06em] ${actionPriorityStyle[item.priority].text}`}
+                      >
+                        {actionPriorityLabel[item.priority]}
+                      </span>
+                      <span className="text-[11px] text-muted">
+                        · {actionEffortLabel[item.effort]} effort
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-sm leading-relaxed text-fg-2">
+                      {item.action}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted">{item.rationale}</p>
+                    {item.affected.length > 0 ? (
+                      <p className="mt-1 text-xs text-muted">
+                        Affected: {item.affected.slice(0, 6).join(", ")}
+                        {item.affected.length > 6
+                          ? ` +${item.affected.length - 6} more`
+                          : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Panel>
+        ) : null}
 
         {/* key numbers */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">

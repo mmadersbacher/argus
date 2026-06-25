@@ -16,6 +16,9 @@ use argus_core::{
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 
+pub mod action;
+pub use action::{ActionEffort, ActionItem, ActionPriority, AdvisoryFact, AdvisoryUrgency};
+
 /// Maximum rows in the top-risk-assets and top-CVE tables.
 const TOP_LIMIT: usize = 10;
 
@@ -261,6 +264,8 @@ pub struct ExposureReport {
     pub period_days: u32,
     /// Executive summary (worst first).
     pub highlights: Vec<Highlight>,
+    /// "Fix these this week" — the ranked, actionable remediation plan.
+    pub action_plan: Vec<ActionItem>,
     /// Inventory section.
     pub inventory: Inventory,
     /// Risk section.
@@ -286,6 +291,7 @@ pub struct ExposureReport {
 #[allow(clippy::cast_precision_loss)] // counts -> percentages / averages
 pub fn build(
     assets: &[AssetFacts],
+    advisories: &[AdvisoryFact],
     events: &[EventFacts],
     monitor: Option<&MonitorFacts>,
     now: OffsetDateTime,
@@ -297,6 +303,7 @@ pub fn build(
         generated_at: now,
         period_days,
         highlights: Vec::new(), // filled below, after the sections exist
+        action_plan: action::action_plan(assets, advisories),
         inventory: inventory(assets, cutoff),
         risk: risk_posture(assets),
         vulnerabilities: vuln_posture(assets),
@@ -695,7 +702,7 @@ mod tests {
 
     #[test]
     fn empty_inventory_builds_a_calm_report() {
-        let report = build(&[], &[], None, now(), 30);
+        let report = build(&[], &[], &[], None, now(), 30);
         assert_eq!(report.inventory.total, 0);
         assert_eq!(report.vulnerabilities.unique_cves, 0);
         assert!((report.risk.average - 0.0).abs() < f32::EPSILON);
@@ -717,7 +724,7 @@ mod tests {
             ),
             asset("db-1", 30.0, vec![]),
         ];
-        let report = build(&assets, &[], None, now(), 30);
+        let report = build(&assets, &[], &[], None, now(), 30);
         assert_eq!(report.highlights[0].level, HighlightLevel::Critical);
         assert!(report.highlights[0].text.contains("Known Exploited"));
         assert_eq!(report.vulnerabilities.assets_with_kev, 1);
@@ -731,7 +738,7 @@ mod tests {
         let mut gone = asset("gone", 10.0, vec![]);
         gone.first_seen = at(80);
         gone.last_seen = at(45); // not seen within the window
-        let report = build(&[fresh, gone], &[], None, now(), 30);
+        let report = build(&[fresh, gone], &[], &[], None, now(), 30);
         assert_eq!(report.inventory.new_in_period, 1);
         assert_eq!(report.inventory.stale, 1);
         // Coverage: 1 of 2 seen in the window.
@@ -749,7 +756,7 @@ mod tests {
                 vuln("CVE-KEV", Severity::Medium, 5.0, Some(0.10), true),
             ],
         )];
-        let report = build(&assets, &[], None, now(), 30);
+        let report = build(&assets, &[], &[], None, now(), 30);
         let order: Vec<&str> = report
             .vulnerabilities
             .top_cves
@@ -773,7 +780,7 @@ mod tests {
                 vec![vuln("CVE-X", Severity::Critical, 9.1, Some(0.5), true)],
             ),
         ];
-        let report = build(&assets, &[], None, now(), 30);
+        let report = build(&assets, &[], &[], None, now(), 30);
         assert_eq!(report.vulnerabilities.unique_cves, 1);
         let top = &report.vulnerabilities.top_cves[0];
         assert_eq!(top.affected, 2);
@@ -799,7 +806,7 @@ mod tests {
                 at: at(60), // outside
             },
         ];
-        let report = build(&[], &events, None, now(), 30);
+        let report = build(&[], &[], &events, None, now(), 30);
         assert_eq!(report.activity.events_in_period, 2);
         assert_eq!(report.activity.new_assets, 1);
         assert_eq!(report.activity.risk_changes, 1);
@@ -808,7 +815,7 @@ mod tests {
 
     #[test]
     fn distribution_covers_all_bands_worst_first() {
-        let report = build(&[asset("a", 85.0, vec![])], &[], None, now(), 30);
+        let report = build(&[asset("a", 85.0, vec![])], &[], &[], None, now(), 30);
         let bands: Vec<RiskBand> = report.risk.distribution.iter().map(|b| b.band).collect();
         assert_eq!(
             bands,
@@ -831,7 +838,7 @@ mod tests {
             target: "192.168.1.0/24".to_owned(),
             last_run_at: Some(at(1)),
         };
-        let report = build(&[], &[], Some(&monitor), now(), 30);
+        let report = build(&[], &[], &[], Some(&monitor), now(), 30);
         assert!(report.monitoring.configured);
         assert!(report.monitoring.enabled);
         assert_eq!(report.monitoring.interval_minutes, Some(60));

@@ -605,10 +605,25 @@ export interface ReportMonitoring {
 }
 
 /** Point-in-time exposure report from GET /api/report. */
+export type ActionPriority = "now" | "this_week" | "soon";
+export type ActionEffort = "quick" | "moderate" | "project";
+
+/** One prioritised, plain-language remediation step (the "fix this week" plan). */
+export interface ActionItem {
+  priority: ActionPriority;
+  title: string;
+  action: string;
+  effort: ActionEffort;
+  rationale: string;
+  affected: string[];
+  source: string;
+}
+
 export interface ExposureReport {
   generated_at: string;
   period_days: number;
   highlights: ReportHighlight[];
+  action_plan: ActionItem[];
   inventory: ReportInventory;
   risk: ReportRisk;
   vulnerabilities: ReportVulns;

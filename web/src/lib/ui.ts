@@ -2,7 +2,15 @@
 // Class strings are written as literals so the Tailwind v4 scanner picks them up.
 
 import type { IconName } from "@/components/icon";
-import type { AssetType, Confidence, DeviceRole, Exposure, RiskBand } from "./api";
+import type {
+  ActionEffort,
+  ActionPriority,
+  AssetType,
+  Confidence,
+  DeviceRole,
+  Exposure,
+  RiskBand,
+} from "./api";
 
 export interface BandStyle {
   label: string;
@@ -58,6 +66,25 @@ export const exposureLabel: Record<Exposure, string> = {
   internal: "Internal",
   internet_facing: "Internet-facing",
   unknown: "Unknown",
+};
+
+/** Action-plan urgency: label + accent colour (worst-first). */
+export const actionPriorityLabel: Record<ActionPriority, string> = {
+  now: "Now",
+  this_week: "This week",
+  soon: "Soon",
+};
+
+export const actionPriorityStyle: Record<ActionPriority, { text: string; dot: string }> = {
+  now: { text: "text-crit", dot: "bg-crit" },
+  this_week: { text: "text-high", dot: "bg-high" },
+  soon: { text: "text-med", dot: "bg-med" },
+};
+
+export const actionEffortLabel: Record<ActionEffort, string> = {
+  quick: "Quick",
+  moderate: "Moderate",
+  project: "Project",
 };
 
 /** Short label for a match/score confidence; `low` reads as "version-blind"

@@ -3,7 +3,10 @@
 //! monitoring coverage). Pure derivation lives in `argus-report`; this module
 //! only loads the tenant's data and maps it into the builder's input facts.
 
-use argus_report::{AssetFacts, EventFacts, ExposureReport, MonitorFacts};
+use argus_policy::{AdvisoryLevel, PolicyAsset};
+use argus_report::{
+    AdvisoryFact, AdvisoryUrgency, AssetFacts, EventFacts, ExposureReport, MonitorFacts,
+};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -83,8 +86,42 @@ pub async fn get_report(
         last_run_at: m.last_run_at,
     });
 
+    // Run the segmentation/exposure rules and feed them into the action plan,
+    // so "fix these this week" spans both vulnerabilities and zoning findings.
+    let policy_facts: Vec<PolicyAsset> = assets
+        .iter()
+        .map(|a| PolicyAsset {
+            name: monitor::asset_name(a),
+            ip: a.asset.interfaces.iter().find_map(|i| i.ip),
+            asset_type: a.asset.asset_type,
+            criticality: a.asset.criticality,
+            exposure: a.asset.exposure,
+            open_ports: a.services.iter().map(|s| s.port).collect(),
+            has_kev: a.vulnerabilities.iter().any(|v| v.kev),
+            os: a.asset.fingerprint.os.clone(),
+            device_role: a.asset.fingerprint.role(),
+        })
+        .collect();
+    let advisory_facts: Vec<AdvisoryFact> = argus_policy::evaluate(&policy_facts)
+        .into_iter()
+        .map(|adv| AdvisoryFact {
+            rule: adv.rule.to_owned(),
+            level: match adv.level {
+                AdvisoryLevel::Critical => AdvisoryUrgency::Critical,
+                AdvisoryLevel::High => AdvisoryUrgency::High,
+                AdvisoryLevel::Medium => AdvisoryUrgency::Medium,
+                AdvisoryLevel::Low => AdvisoryUrgency::Low,
+            },
+            title: adv.title,
+            rationale: adv.rationale,
+            recommendation: adv.recommendation,
+            affected: adv.affected.into_iter().map(|x| x.name).collect(),
+        })
+        .collect();
+
     Ok(Json(argus_report::build(
         &asset_facts,
+        &advisory_facts,
         &event_facts,
         monitor_facts.as_ref(),
         OffsetDateTime::now_utc(),
