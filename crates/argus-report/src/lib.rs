@@ -376,41 +376,32 @@ impl ExposureReport {
 }
 
 fn inventory(assets: &[AssetFacts], cutoff: OffsetDateTime) -> Inventory {
-    // Largest first; ties keep declaration order (sort is stable).
-    let mut by_type: Vec<TypeCount> = [
-        AssetType::It,
-        AssetType::Ot,
-        AssetType::Iot,
-        AssetType::Iomt,
-        AssetType::Network,
-        AssetType::Cloud,
-        AssetType::Mobile,
-        AssetType::Unknown,
-    ]
-    .into_iter()
-    .map(|asset_type| TypeCount {
-        asset_type,
-        count: assets.iter().filter(|a| a.asset_type == asset_type).count(),
-    })
-    .filter(|t| t.count > 0)
-    .collect();
+    // Largest first; ties keep declaration order (sort is stable). The variant
+    // lists come from `AssetType::ALL` / `Criticality::ALL` so a new core
+    // variant can never be silently dropped from the report (see the core
+    // `all_covers_every_variant` guard).
+    let mut by_type: Vec<TypeCount> = AssetType::ALL
+        .into_iter()
+        .map(|asset_type| TypeCount {
+            asset_type,
+            count: assets.iter().filter(|a| a.asset_type == asset_type).count(),
+        })
+        .filter(|t| t.count > 0)
+        .collect();
     by_type.sort_by_key(|t| std::cmp::Reverse(t.count));
 
-    let by_criticality = [
-        Criticality::Critical,
-        Criticality::High,
-        Criticality::Medium,
-        Criticality::Low,
-    ]
-    .into_iter()
-    .map(|criticality| CriticalityCount {
-        criticality,
-        count: assets
-            .iter()
-            .filter(|a| a.criticality == criticality)
-            .count(),
-    })
-    .collect();
+    // `ALL` is ascending (`Low`..`Critical`); the report shows worst-first.
+    let by_criticality = Criticality::ALL
+        .into_iter()
+        .rev()
+        .map(|criticality| CriticalityCount {
+            criticality,
+            count: assets
+                .iter()
+                .filter(|a| a.criticality == criticality)
+                .count(),
+        })
+        .collect();
 
     Inventory {
         total: assets.len(),
@@ -433,19 +424,15 @@ fn risk_posture(assets: &[AssetFacts]) -> RiskPosture {
         assets.iter().map(|a| a.risk.value).sum::<f32>() / assets.len() as f32
     };
 
-    let distribution = [
-        RiskBand::Critical,
-        RiskBand::High,
-        RiskBand::Medium,
-        RiskBand::Low,
-        RiskBand::Info,
-    ]
-    .into_iter()
-    .map(|band| BandCount {
-        band,
-        count: assets.iter().filter(|a| a.risk.band == band).count(),
-    })
-    .collect();
+    // `ALL` is ascending (`Info`..`Critical`); the distribution shows worst-first.
+    let distribution = RiskBand::ALL
+        .into_iter()
+        .rev()
+        .map(|band| BandCount {
+            band,
+            count: assets.iter().filter(|a| a.risk.band == band).count(),
+        })
+        .collect();
 
     let mut ranked: Vec<&AssetFacts> = assets.iter().collect();
     ranked.sort_by(|x, y| {

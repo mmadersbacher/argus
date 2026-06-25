@@ -436,7 +436,7 @@ fn flat_network(assets: &[PolicyAsset]) -> Option<Advisory> {
     let (subnet, members) = zones.into_iter().max_by_key(|(_, m)| m.len())?;
     let share = members.len() as f32 / assets.len() as f32;
     let mut types: Vec<AssetType> = members.iter().map(|a| a.asset_type).collect();
-    types.sort_by_key(|t| format!("{t:?}"));
+    types.sort_unstable(); // AssetType is Ord, so no Debug-string keying needed
     types.dedup();
     if share < FLAT_SHARE || types.len() < FLAT_MIN_TYPES {
         return None;
@@ -474,16 +474,15 @@ fn flat_network(assets: &[PolicyAsset]) -> Option<Advisory> {
 /// single-purpose subnet is assumed intentionally isolated). Reachability is
 /// INFERRED from the /24 — there is no VLAN telemetry — and the advisory says so.
 fn mgmt_reachable_internal(assets: &[PolicyAsset]) -> Option<Advisory> {
-    // Distinct asset classes per /24 (AssetType is not Ord/Hash, so key on its
-    // Debug form). A zone mixing >=2 classes means a compromise of one class can
-    // pivot to the others.
-    let mut classes_per_zone: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Distinct asset classes per /24. A zone mixing >=2 classes means a
+    // compromise of one class can pivot to the others.
+    let mut classes_per_zone: BTreeMap<String, Vec<AssetType>> = BTreeMap::new();
     for a in assets {
         if let Some(subnet) = a.subnet() {
             classes_per_zone
                 .entry(subnet)
                 .or_default()
-                .push(format!("{:?}", a.asset_type));
+                .push(a.asset_type);
         }
     }
     let distinct: BTreeMap<String, usize> = classes_per_zone
