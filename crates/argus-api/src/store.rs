@@ -47,11 +47,17 @@ impl IngestLocks {
 }
 
 /// A storage failure mapped to an HTTP-friendly shape.
-#[derive(Debug)]
+///
+/// Derives `Display`/`Error` (via `thiserror`) so it composes with `?` in any
+/// `std::error::Error` context; the HTTP layer still maps the variants
+/// explicitly so backend detail is never surfaced to clients.
+#[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     /// A uniqueness constraint was violated (slug / email / key).
+    #[error("conflict: {0}")]
     Conflict(&'static str),
     /// Any other backend error (details logged, not surfaced to clients).
+    #[error("storage backend error: {0}")]
     Backend(String),
 }
 

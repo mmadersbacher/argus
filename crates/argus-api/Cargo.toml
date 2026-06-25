@@ -34,6 +34,7 @@ argon2 = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 # `oneshot` drives the router in the cookie/CSRF integration test without a
